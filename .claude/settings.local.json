@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Select-Object FullName)",
+      "Bash(tree:*)",
+      "Bash(dir /S /B)",
+      "Bash(mkdir:*)",
+      "Bash(idf.py fullclean)",
+      "Bash(where idf.py)",
+      "Bash(echo:*)",
+      "Bash(powershell.exe:*)",
+      "Bash(D:\\esp32-idf-ahy\\5.1.2\\python\\python.exe:*)",
+      "WebSearch",
+      "Bash(dir:*)",
+      "Bash(D:\\esp32-idf-ahy\\5.1.2\\python_env\\idf5.1_py3.11_env\\Scripts\\python.exe:*)",
+      "Bash(Select-Object -Last 30)",
+      "Bash(cmd.exe /c \"D:\\esp_test_code\\project\\sample_project\\erase_and_flash.bat\")",
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(cat \"D:\\esp_test_code\\project\\sample_project\\build\\log\\idf_py_stderr_output_23320\")",
+      "Bash(D:esp32-idf-ahy5.1.2pythonpython.exe erase_and_flash.bat)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :8080)",
+      "Bash(taskkill /F /PID 9800)",
+      "Bash(taskkill //F //PID 9800)",
+      "Bash(idf.py add-dependency \"espressif/esp_websocket_client\")",
+      "Bash(rm -rf \"D:\\esp_test_code\\project\\sample_project\\build\")",
+      "Bash(ipconfig:*)",
+      "Bash(findstr:*)",
+      "Bash(cmd.exe /c \"dir /B D:\\esp_test_code\\project\\sample_project\\managed_components\")",
+      "Bash(idf.py build:*)",
+      "Bash(idf.py add-dependency:*)",
+      "Bash(D:esp32-idf-ahy5.1.2python_envidf5.1_py3.11_envScriptspython.exe D:esp32-idf-ahy5.1.2toolsidf.py build)",
+      "Bash(cat:*)",
+      "Bash(Select-Object -First 1)",
+      "Bash(cmd.exe /c \"D:\\esp32-idf-ahy\\5.1.2\\python_env\\idf5.1_py3.11_env\\Scripts\\python.exe D:\\esp32-idf-ahy\\5.1.2\\tools\\idf.py build 2>&1\":*)",
+      "Bash(git init:*)",
+      "Bash(git remote add:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
