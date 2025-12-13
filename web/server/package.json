@@ -1,0 +1,27 @@
+{
+  "name": "smart-terminal-manager-server",
+  "version": "1.0.0",
+  "description": "智能终端管理系统 - WebSocket服务器",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node test-server.js",
+    "test:connections": "node test-connection-manager.js"
+  },
+  "keywords": [
+    "websocket",
+    "terminal",
+    "nodejs",
+    "server"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

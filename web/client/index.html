@@ -1,0 +1,1510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小月智能家居系统</title>
+    <!-- Chart.js库用于数据可视化 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="css/tech-theme.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>&#127769; 小月智能家居系统</h1>
+            <div class="mode-switch">
+                <button class="btn-switch active" onclick="switchToAIMode()">AI对话</button>
+                <button class="btn-switch" onclick="switchToSensorMode()">传感器监控</button>
+                <button class="btn-switch" onclick="switchToControlMode()">控制模式</button>
+                <button class="btn-switch" onclick="switchToVisionMode()">🎥 视觉检测</button>
+            </div>
+        </header>
+
+        <main id="mainContent">
+            <!-- 内容将通过JavaScript动态加载 -->
+        </main>
+    </div>
+
+    <!-- 引入JavaScript文件 -->
+    <script src="js/ConnectionManager.js"></script>
+    <script src="js/UIManager.js"></script>
+    <script src="js/TTSClient.js"></script>
+    <script src="js/AIManager.js"></script>
+    <script src="js/App.js"></script>
+
+    <script>
+        // 模式管理器
+        class ModeManager {
+            constructor() {
+                this.currentMode = 'ai';
+                this.aiManager = null;
+
+                // 共享WebSocket连接
+                this.sharedWs = null;
+                this.wsServer = 'localhost';
+                this.wsPort = '8080';
+                this.isConnected = false;
+
+                // 保存最后接收的传感器数据
+                this.lastSensorData = null;
+            }
+
+            init() {
+                // 默认加载AI模式
+                this.switchToAIMode();
+            }
+
+            // 共享连接方法
+            connectSharedWebSocket(server, port) {
+                if (this.sharedWs && this.sharedWs.readyState === WebSocket.OPEN) {
+                    console.log('✅ 已连接，无需重复连接');
+                    return;
+                }
+
+                this.wsServer = server;
+                this.wsPort = port;
+                const wsUrl = `ws://${server}:${port}`;
+                console.log('🔗 尝试连接WebSocket:', wsUrl);
+                console.log('🔗 服务器:', server);
+                console.log('🔗 端口:', port);
+
+                try {
+                    this.sharedWs = new WebSocket(wsUrl);
+
+                    this.sharedWs.onopen = () => {
+                        console.log('✅✅✅ WebSocket连接成功! ✅✅✅');
+                        console.log('✅ 连接URL:', wsUrl);
+                        console.log('✅ 状态码:', this.sharedWs.readyState, '(1=OPEN)');
+                        this.isConnected = true;
+                        this.updateConnectionStatus(true);
+                    };
+                } catch (error) {
+                    console.error('❌ WebSocket创建失败:', error);
+                }
+
+                this.sharedWs.onmessage = (event) => {
+                    // 检查是否为二进制消息（JPEG图像帧）
+                    if (event.data instanceof Blob) {
+                        console.log('📷 收到图像帧:', event.data.size, '字节');
+                        // 仅在vision模式下处理图像帧
+                        if (this.currentMode === 'vision') {
+                            this.handleVisionImageFrame(event.data);
+                        }
+                        return;
+                    }
+
+                    // 文本消息处理
+                    console.log('📥 收到消息:', event.data);
+                    try {
+                        const message = JSON.parse(event.data);
+
+                        // AI检测数据 - 发送到vision模式
+                        if (message.type === 'ai_detection' && this.currentMode === 'vision') {
+                            this.handleVisionTextMessage(message);
+                            return;
+                        }
+
+                        // 传感器数据消息（同时更新所有页面）
+                        if (message.type === 'message' && message.data && typeof message.data === 'object') {
+                            // 保存最后的数据
+                            this.lastSensorData = message.data;
+
+                            // 更新传感器监控页面
+                            this.updateSensorDisplay(message.data);
+
+                            // 更新控制页面的温度显示
+                            const tempEl = document.getElementById('acCurrentTemp');
+                            if (tempEl && message.data.temperature !== undefined) {
+                                tempEl.textContent = `${message.data.temperature.toFixed(1)}°C`;
+                            }
+                        }
+
+                        // 系统消息 - 发送到vision模式
+                        if (message.type === 'system' && this.currentMode === 'vision') {
+                            this.handleVisionTextMessage(message);
+                        }
+                    } catch (e) {
+                        console.error('消息解析失败:', e);
+                    }
+                };
+
+                this.sharedWs.onclose = (event) => {
+                    console.log('⚠️⚠️⚠️ WebSocket连接已关闭 ⚠️⚠️⚠️');
+                    console.log('⚠️ 关闭代码:', event.code);
+                    console.log('⚠️ 关闭原因:', event.reason || '无');
+                    console.log('⚠️ 是否正常关闭:', event.wasClean);
+                    this.isConnected = false;
+                    this.sharedWs = null;
+                    this.updateConnectionStatus(false);
+                };
+
+                this.sharedWs.onerror = (error) => {
+                    console.error('❌❌❌ WebSocket连接错误! ❌❌❌');
+                    console.error('❌ 错误对象:', error);
+                    console.error('❌ 连接URL:', wsUrl);
+                    console.error('❌ 可能原因:');
+                    console.error('   1. WebSocket服务器未启动');
+                    console.error('   2. 服务器地址或端口错误');
+                    console.error('   3. 网络连接问题');
+                    console.error('   4. 防火墙阻止连接');
+                    this.isConnected = false;
+                    this.updateConnectionStatus(false, true);
+                };
+            }
+
+            disconnectSharedWebSocket() {
+                if (this.sharedWs) {
+                    console.log('🔌 断开共享连接');
+                    this.sharedWs.close();
+                    this.sharedWs = null;
+                    this.isConnected = false;
+                }
+            }
+
+            updateConnectionStatus(connected, error = false) {
+                // 更新所有页面的连接状态显示
+                const statusElements = [
+                    document.getElementById('controlConnectionStatus'),
+                    document.getElementById('sensorStatus')
+                ];
+                const connectButtons = [
+                    document.getElementById('controlConnectBtn'),
+                    document.getElementById('sensorConnectBtn')
+                ];
+                const disconnectButtons = [
+                    document.getElementById('controlDisconnectBtn'),
+                    document.getElementById('sensorDisconnectBtn')
+                ];
+
+                statusElements.forEach(el => {
+                    if (el) {
+                        if (connected) {
+                            el.textContent = '已连接';
+                            el.className = 'connection-status connected';
+                        } else if (error) {
+                            el.textContent = '连接失败';
+                            el.className = 'connection-status disconnected';
+                        } else {
+                            el.textContent = '未连接';
+                            el.className = 'connection-status disconnected';
+                        }
+                    }
+                });
+
+                connectButtons.forEach(btn => {
+                    if (btn) btn.disabled = connected;
+                });
+
+                disconnectButtons.forEach(btn => {
+                    if (btn) btn.disabled = !connected;
+                });
+
+                // 更新 vision 模式的状态
+                this.updateVisionStatus(connected);
+            }
+
+            sendMessage(data) {
+                if (this.sharedWs && this.sharedWs.readyState === WebSocket.OPEN) {
+                    const message = {
+                        type: "message",
+                        timestamp: Date.now(),
+                        data: data
+                    };
+                    const jsonString = JSON.stringify(message);
+                    this.sharedWs.send(jsonString);
+                    console.log('📤 发送消息:', message);
+                    console.log('📤 JSON字符串:', jsonString);
+                    console.log('📤 WebSocket状态:', this.sharedWs.readyState, '(OPEN=1)');
+                } else {
+                    const state = this.sharedWs ? this.sharedWs.readyState : 'null';
+                    console.error('❌ 无法发送消息 - WebSocket状态:', state, '(需要=1)');
+                    console.error('❌ WebSocket对象存在?', !!this.sharedWs);
+                }
+            }
+
+
+            switchToAIMode() {
+                this.currentMode = 'ai';
+                this.updateModeButtons('ai');
+
+                const main = document.getElementById('mainContent');
+                main.innerHTML = `
+                    <section class="ai-chat-section">
+                        <div class="ai-chat-container">
+                            <div class="ai-chat-header">
+                                <h3>小月智能对话</h3>
+                                <p>可以与小月进行自然对话，控制智能设备</p>
+                            </div>
+                            <div class="ai-chat-messages" id="aiChatMessages">
+                                <!-- AI对话消息将在这里显示 -->
+                            </div>
+                            <div class="ai-chat-input">
+                                <textarea id="aiChatInput" placeholder="输入消息与小月对话..." rows="1"></textarea>
+                                <div class="ai-input-actions">
+                                    <button id="aiSendBtn" class="btn-ai-send">发送</button>
+                                    <button id="aiQueryStateBtn" class="btn-ai-query">查询状态</button>
+                                    <button id="aiTTSToggle" class="btn-ai-tts">🔇 语音关闭</button>
+                                    <button id="aiClearBtn" class="btn-ai-clear">清除</button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                `;
+
+                // 初始化AI管理器
+                this.aiManager = new AIManager();
+                this.aiManager.init({
+                    chatContainer: document.getElementById('aiChatMessages'),
+                    inputBox: document.getElementById('aiChatInput'),
+                    sendButton: document.getElementById('aiSendBtn'),
+                    queryStateButton: document.getElementById('aiQueryStateBtn'),
+                    ttsToggleButton: document.getElementById('aiTTSToggle'),
+                    clearButton: document.getElementById('aiClearBtn')
+                });
+
+                window.aiManager = this.aiManager;
+            }
+
+
+            switchToControlMode() {
+                this.currentMode = 'control';
+                this.updateModeButtons('control');
+
+                // 保存当前连接配置（如果有输入框存在的话）
+                const currentServerUrl = document.getElementById('controlServerUrl');
+                const currentServerPort = document.getElementById('controlServerPort');
+                if (currentServerUrl) this.wsServer = currentServerUrl.value || this.wsServer;
+                if (currentServerPort) this.wsPort = currentServerPort.value || this.wsPort;
+
+                const main = document.getElementById('mainContent');
+                main.innerHTML = `
+                    <section class="control-section">
+                        <div class="control-container">
+                            <h2>设备控制模式</h2>
+
+                            <!-- 连接配置面板 -->
+                            <div class="connection-panel">
+                                <div class="connection-config">
+                                    <div class="config-group">
+                                        <label for="controlServerUrl">服务器地址:</label>
+                                        <input type="text" id="controlServerUrl" value="localhost" placeholder="如: localhost" class="tech-input">
+                                    </div>
+                                    <div class="config-group">
+                                        <label for="controlServerPort">端口:</label>
+                                        <input type="number" id="controlServerPort" value="8080" placeholder="如: 8080" class="tech-input">
+                                    </div>
+                                    <div class="config-group">
+                                        <button id="controlConnectBtn" class="btn-primary">连接</button>
+                                        <button id="controlDisconnectBtn" class="btn-secondary" disabled>断开连接</button>
+                                        <span id="controlConnectionStatus" class="connection-status disconnected">未连接</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 命令发送日志 -->
+                            <div class="device-control-panel" style="margin: 20px 0;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                    <h3 style="border:none; padding:0; margin:0; font-size: 1rem;">📡 命令发送日志</h3>
+                                    <button onclick="clearCommandLog()" class="btn-ai-clear" style="padding: 4px 12px; font-size: 12px;">清空</button>
+                                </div>
+                                <div id="commandLog" class="log-container" style="height: 120px;">
+                                    <div style="color: var(--text-dim);">等待发送命令...</div>
+                                </div>
+                            </div>
+
+                            <!-- 智能设备控制面板 -->
+                            <div class="control-panels">
+                                <!-- 风扇控制面板（电机） -->
+                                <div class="device-control-panel">
+                                    <h3>🌀 风扇控制</h3>
+
+                                    <!-- 开关按钮 -->
+                                    <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+                                        <button id="fanOnBtn" class="btn-primary" onclick="toggleFan(true)" style="flex: 1;">开启</button>
+                                        <button id="fanOffBtn" class="btn-secondary" onclick="toggleFan(false)" style="flex: 1;">关闭</button>
+                                    </div>
+
+                                    <!-- 状态显示 -->
+                                    <div class="device-status" style="margin-bottom: 16px; text-align: center;">
+                                        <span style="font-size: 13px; color: var(--text-secondary);">状态：<span id="fanStatus" style="font-weight: 600; color: var(--neon-red);">关闭</span></span>
+                                    </div>
+
+                                    <!-- 转速控制区域 -->
+                                    <div id="fanControlArea" style="opacity: 0.5; pointer-events: none;">
+                                        <div style="margin-bottom: 16px;">
+                                            <label style="display: block; color: var(--text-secondary); margin-bottom: 8px; font-weight: 500;">
+                                                风扇转速：<span id="fanSpeedValue">50%</span>
+                                            </label>
+                                            <input type="range" id="fanSpeed" min="0" max="100" value="50"
+                                                   style="width: 100%; accent-color: var(--neon-cyan);" oninput="updateFanSpeed(this.value)">
+                                            <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-dim); margin-top: 4px;">
+                                                <span>最小</span>
+                                                <span>最大</span>
+                                            </div>
+                                        </div>
+                                        <div style="margin-bottom: 16px;">
+                                            <label style="display: block; color: var(--text-secondary); margin-bottom: 8px; font-weight: 500;">快速控制</label>
+                                            <div style="display: flex; gap: 8px;">
+                                                <button class="btn" onclick="setFanSpeed(30)" style="flex: 1; border: 1px solid var(--neon-blue); color: var(--neon-blue); background: rgba(0, 102, 255, 0.1);">低速</button>
+                                                <button class="btn" onclick="setFanSpeed(50)" style="flex: 1; border: 1px solid var(--neon-blue); color: var(--neon-blue); background: rgba(0, 102, 255, 0.1);">中速</button>
+                                                <button class="btn" onclick="setFanSpeed(100)" style="flex: 1; border: 1px solid var(--neon-blue); color: var(--neon-blue); background: rgba(0, 102, 255, 0.1);">全速</button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px; text-align: center;">
+                                        <span style="font-size: 13px; color: var(--text-secondary);">电机PWM占空比：<span id="fanPWM" style="font-weight: 600; color: var(--neon-cyan);">0%</span></span>
+                                    </div>
+                                </div>
+
+                                <!-- 窗户控制面板（舵机） -->
+                                <div class="device-control-panel">
+                                    <h3>🪟 窗户控制</h3>
+
+                                    <!-- 开关按钮 -->
+                                    <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+                                        <button id="windowOnBtn" class="btn-primary" onclick="toggleWindow(true)" style="flex: 1;">开启</button>
+                                        <button id="windowOffBtn" class="btn-secondary" onclick="toggleWindow(false)" style="flex: 1;">关闭</button>
+                                    </div>
+
+                                    <!-- 状态显示 -->
+                                    <div class="device-status" style="margin-bottom: 16px; text-align: center;">
+                                        <span style="font-size: 13px; color: var(--text-secondary);">状态：<span id="windowStatus" style="font-weight: 600; color: var(--neon-red);">关闭</span></span>
+                                    </div>
+
+                                    <!-- 角度控制区域 -->
+                                    <div id="windowControlArea" style="opacity: 0.5; pointer-events: none;">
+                                        <div style="margin-bottom: 16px;">
+                                            <label style="display: block; color: var(--text-secondary); margin-bottom: 8px; font-weight: 500;">
+                                                窗户开度：<span id="windowAngleValue">90°</span>
+                                            </label>
+                                            <input type="range" id="windowAngle" min="0" max="180" value="90"
+                                                   style="width: 100%; accent-color: var(--neon-magenta);" oninput="updateWindowAngle(this.value)">
+                                            <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-dim); margin-top: 4px;">
+                                                <span>关闭 (0°)</span>
+                                                <span>全开 (180°)</span>
+                                            </div>
+                                        </div>
+                                        <div style="margin-bottom: 16px;">
+                                            <label style="display: block; color: var(--text-secondary); margin-bottom: 8px; font-weight: 500;">快速控制</label>
+                                            <div style="display: flex; gap: 8px;">
+                                                <button class="btn" onclick="setWindowAngle(45)" style="flex: 1; border: 1px solid var(--neon-magenta); color: var(--neon-magenta); background: rgba(188, 19, 254, 0.1);">小开</button>
+                                                <button class="btn" onclick="setWindowAngle(90)" style="flex: 1; border: 1px solid var(--neon-magenta); color: var(--neon-magenta); background: rgba(188, 19, 254, 0.1);">半开</button>
+                                                <button class="btn" onclick="setWindowAngle(180)" style="flex: 1; border: 1px solid var(--neon-magenta); color: var(--neon-magenta); background: rgba(188, 19, 254, 0.1);">全开</button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px; text-align: center;">
+                                        <span style="font-size: 13px; color: var(--text-secondary);">舵机角度：<span id="servoPWM" style="font-weight: 600; color: var(--neon-magenta);">0°</span></span>
+                                    </div>
+                                </div>
+
+                                <!-- 指示灯控制面板 -->
+                                <div class="device-control-panel">
+                                    <h3>🚨 状态指示灯</h3>
+
+                                    <!-- 开关按钮 -->
+                                    <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+                                        <button id="ledOnBtn" class="btn-primary" onclick="toggleIndicatorLight(true)" style="flex: 1; opacity: 0.5;">开启</button>
+                                        <button id="ledOffBtn" class="btn-secondary" onclick="toggleIndicatorLight(false)" style="flex: 1; opacity: 1;">关闭</button>
+                                    </div>
+
+                                    <!-- 状态显示 -->
+                                    <div class="device-status" style="margin-bottom: 16px; text-align: center;">
+                                        <span style="font-size: 13px; color: var(--text-secondary);">电源：<span id="ledPowerStatus" style="font-weight: 600; color: var(--neon-green);">开启</span></span>
+                                    </div>
+
+                                    <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px;">
+                                        <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">🚦 指示灯根据传感器数据自动变色：</div>
+                                        <div style="font-size: 12px; color: var(--text-dim); line-height: 1.6;">
+                                            🟢 绿灯 - 环境正常（温度≤30°C，无烟雾）<br>
+                                            🔴 红灯 - 警戒状态（温度>30°C 或 烟雾浓度高）
+                                        </div>
+                                    </div>
+                                    <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px; margin-top: 12px;">
+                                        <div style="text-align: center; margin-bottom: 8px;">
+                                            <span id="indicatorLightColor" style="display: inline-block; width: 60px; height: 60px; border-radius: 50%; background: var(--neon-green); box-shadow: 0 0 20px rgba(0, 255, 157, 0.6);"></span>
+                                        </div>
+                                        <div style="text-align: center;">
+                                            <span id="indicatorLightStatus" style="font-size: 13px; font-weight: 600; color: var(--neon-green);">状态：正常</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                `;
+
+                // 设置控制模式的事件处理
+                this.setupControlModeEvents();
+
+                // 同步连接配置到输入框
+                document.getElementById('controlServerUrl').value = this.wsServer;
+                document.getElementById('controlServerPort').value = this.wsPort;
+
+                // 如果已连接，更新UI状态
+                if (this.isConnected) {
+                    this.updateConnectionStatus(true);
+
+                    // 恢复最后的温度数据
+                    if (this.lastSensorData && this.lastSensorData.temperature !== undefined) {
+                        const tempEl = document.getElementById('acCurrentTemp');
+                        if (tempEl) {
+                            tempEl.textContent = `${this.lastSensorData.temperature.toFixed(1)}°C`;
+                        }
+                    }
+                }
+            }
+
+            switchToSensorMode() {
+                this.currentMode = 'sensor';
+                this.updateModeButtons('sensor');
+
+                // 保存当前连接配置
+                const currentServerUrl = document.getElementById('sensorServerUrl');
+                const currentServerPort = document.getElementById('sensorServerPort');
+                if (currentServerUrl) this.wsServer = currentServerUrl.value || this.wsServer;
+                if (currentServerPort) this.wsPort = currentServerPort.value || this.wsPort;
+
+                const main = document.getElementById('mainContent');
+                main.innerHTML = `
+                    <section class="sensor-section">
+                        <div class="connection-panel">
+                            <div class="connection-config">
+                                <div class="config-group">
+                                    <label>服务器:</label>
+                                    <input type="text" id="sensorServerUrl" value="localhost" class="tech-input">
+                                </div>
+                                <div class="config-group">
+                                    <label>端口:</label>
+                                    <input type="number" id="sensorServerPort" value="8080" class="tech-input">
+                                </div>
+                                <button id="sensorConnectBtn" class="btn-primary">连接</button>
+                                <button id="sensorDisconnectBtn" class="btn-secondary" disabled>断开</button>
+                                <button id="sensorSimulateBtn" class="btn-secondary" style="margin-left: 10px; border-color: var(--neon-magenta); color: var(--neon-magenta);">🧪 模拟</button>
+                                <span id="sensorStatus" class="status-indicator disconnected">未连接</span>
+                            </div>
+                        </div>
+
+                        <div class="sensor-grid device-cards-container">
+                            <!-- 温度卡片 -->
+                            <div class="device-card" id="tempCard">
+                                <svg class="tech-icon" viewBox="0 0 24 24">
+                                    <path d="M12 2C9.79 2 8 3.79 8 6v5c0 1.1-.9 2-2 2H4c-1.1 0-2 .9-2 2v6c0 1.1.9 2 2 2h4c1.1 0 2-.9 2-2v-5l2-2h4c1.1 0 2-.9 2-2V6c0-2.21-1.79-4-4-4zm-4 17H6v-2h2v2zm0-4H6v-2h2v2zm10-6h-2V7h2v2z" opacity="0.5"/>
+                                    <path d="M15 11V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6l-2 2v6c0 2.21 1.79 4 4 4s4-1.79 4-4v-6l-2-2z"/>
+                                </svg>
+                                <div class="detail-label">温度</div>
+                                <div id="temperature" style="font-size: 36px; font-weight: 600; color: var(--text-primary);">--</div>
+                                <div class="detail-label">°C</div>
+                            </div>
+
+                            <!-- 湿度卡片 -->
+                            <div class="device-card" id="humidityCard">
+                                <svg class="tech-icon" viewBox="0 0 24 24">
+                                    <path d="M12 2C8.13 2 5 5.13 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.87-3.13-7-7-7zm0 10.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                                    <path d="M12 22c4.97 0 9-4.03 9-9 0-4.97-4.03-9-9-9s-9 4.03-9 9 4.03 9 9 9z" opacity="0.3"/>
+                                </svg>
+                                <div class="detail-label">湿度</div>
+                                <div id="humidity" style="font-size: 36px; font-weight: 600; color: var(--text-primary);">--</div>
+                                <div class="detail-label">%</div>
+                            </div>
+
+                            <!-- 烟雾检测卡片 -->
+                            <div class="device-card" id="smokeCard">
+                                <svg class="tech-icon" viewBox="0 0 24 24">
+                                    <path d="M19.66 11.23l-1.34-2.68-2.68 1.34c-.16.08-.34.12-.51.12-.51 0-.97-.33-1.12-.83l-1.33-4.48-1.34 4.47c-.15.49-.61.83-1.12.83-.17 0-.35-.04-.51-.12l-2.68-1.34-1.34 2.68c-.2.4-.64.63-1.08.57-.44-.06-.81-.36-.91-.79l-.89-3.56c-.52 2.76-2.54 5.92-2.79 8.27-.61 5.61 5.22 8.5 7.97 4.08.38-.61.73-.24.79-.1 2.3 5.56 8.58 2.37 7.98-3.09-.27-2.45-2.28-5.61-2.79-8.37l-.92 3.66c-.1.43-.46.73-.91.79-.42.06-.86-.17-1.06-.55z"/>
+                                </svg>
+                                <div class="detail-label">烟雾检测</div>
+                                <div id="smokeVoltage" style="font-size: 28px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">-- V</div>
+                                <span id="smokeIndicator" class="status-indicator connected">✓ 正常</span>
+                            </div>
+
+                            <!-- 光照强度卡片 -->
+                            <div class="device-card" id="lightCard">
+                                <svg class="tech-icon" viewBox="0 0 24 24">
+                                    <path d="M6.76 4.84l-1.8-1.79-1.41 1.41 1.79 1.79 1.42-1.41zM4 10.5H1v2h3v-2zm9-9.95h-2V3.5h2V.55zm7.45 3.91l-1.41-1.41-1.79 1.79 1.41 1.41 1.79-1.79zm-3.21 13.7l1.79 1.8 1.41-1.41-1.8-1.79-1.4 1.4zM20 10.5v2h3v-2h-3zm-8-5c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm-1 16.95h2V21.5h-2v2.95zm-7.45-3.91l1.41 1.41 1.79-1.79-1.41-1.41-1.79 1.79z"/>
+                                </svg>
+                                <div class="detail-label">光照强度</div>
+                                <div id="lightIntensity" style="font-size: 36px; font-weight: 600; color: var(--text-primary);">--</div>
+                                <div class="detail-label">%</div>
+                            </div>
+                        </div>
+
+                        <!-- 数据曲线图 -->
+                        <div class="device-control-panel" style="margin-top: 30px;">
+                            <h3>📈 传感器数据趋势</h3>
+                            <canvas id="sensorChart" style="max-height: 300px;"></canvas>
+                        </div>
+
+                        <div style="text-align: center; margin-top: 30px; font-size: 14px; color: var(--text-dim);" id="sensorTimestamp"></div>
+
+                        <div class="device-control-panel" style="margin-top: 20px;">
+                            <h3>📊 系统日志</h3>
+                            <div id="sensorLogContainer" class="log-container"></div>
+                        </div>
+                    </section>
+                `;
+
+                this.setupSensorMode();
+
+                // 同步连接配置到输入框
+                document.getElementById('sensorServerUrl').value = this.wsServer;
+                document.getElementById('sensorServerPort').value = this.wsPort;
+
+                // 如果已连接，更新UI状态
+                if (this.isConnected) {
+                    this.updateConnectionStatus(true);
+                    this.sensorLog('✅ 已连接到下位机');
+
+                    // 恢复最后的传感器数据
+                    if (this.lastSensorData) {
+                        this.updateSensorDisplay(this.lastSensorData);
+                        this.sensorLog('📊 已恢复最后的数据显示');
+                    }
+                }
+            }
+
+            setupSensorMode() {
+                const connectBtn = document.getElementById('sensorConnectBtn');
+                const disconnectBtn = document.getElementById('sensorDisconnectBtn');
+
+                connectBtn.addEventListener('click', () => this.connectSensor());
+                disconnectBtn.addEventListener('click', () => this.disconnectSensor());
+
+                const simulateBtn = document.getElementById('sensorSimulateBtn');
+                if (simulateBtn) {
+                    simulateBtn.addEventListener('click', () => this.simulateSensorData());
+                }
+
+                // 初始化图表
+                this.initChart();
+
+                // 初始化日志
+                this.sensorLog('系统初始化完成');
+                this.sensorLog('📈 数据曲线图已加载');
+            }
+
+            sensorLog(message) {
+                const logContainer = document.getElementById('sensorLogContainer');
+                if (logContainer) {
+                    const time = new Date().toLocaleTimeString('zh-CN');
+                    logContainer.innerHTML += `[${time}] ${message}<br>`;
+                    logContainer.scrollTop = logContainer.scrollHeight;
+                }
+            }
+
+            connectSensor() {
+                const url = document.getElementById('sensorServerUrl').value || 'localhost';
+                const port = document.getElementById('sensorServerPort').value || '8080';
+
+                this.sensorLog(`连接到 ws://${url}:${port}...`);
+
+                // 使用共享连接
+                this.connectSharedWebSocket(url, port);
+
+                // 连接成功后显示日志
+                if (this.isConnected) {
+                    this.sensorLog('✅ WebSocket连接成功');
+                }
+            }
+
+            disconnectSensor() {
+                this.sensorLog('断开连接');
+                // 使用共享断开
+                this.disconnectSharedWebSocket();
+            }
+
+            simulateSensorData() {
+                const btn = document.getElementById('sensorSimulateBtn');
+                if (this.simulationTimer) {
+                    clearInterval(this.simulationTimer);
+                    this.simulationTimer = null;
+                    if (btn) {
+                        btn.textContent = '🧪 模拟';
+                        btn.style.backgroundColor = '';
+                        btn.style.color = '#bc13fe';
+                        btn.style.boxShadow = '';
+                    }
+                    this.sensorLog('⏹️ 模拟数据已停止');
+                } else {
+                    this.sensorLog('🧪 模拟数据已启动');
+                    if (btn) {
+                        btn.textContent = '⏹️ 关闭模拟';
+                        btn.style.backgroundColor = 'rgba(255, 59, 48, 0.2)'; // Red tint for stop action
+                        btn.style.color = '#ff3b30'; // Red text
+                        btn.style.borderColor = '#ff3b30';
+                        btn.style.boxShadow = '0 0 15px rgba(255, 59, 48, 0.4)';
+                    }
+
+                    this.simulationTimer = setInterval(() => {
+                        const fakeData = {
+                            temperature: 20 + Math.random() * 10 - 2,
+                            humidity: 50 + Math.random() * 20 - 10,
+                            smoke_voltage: 0.2 + Math.random() * 0.1,
+                            smoke_detected: false,
+                            light_intensity: 30 + Math.random() * 50
+                        };
+
+                        // 偶尔触发报警
+                        if (Math.random() > 0.95) {
+                            fakeData.smoke_detected = true;
+                            fakeData.smoke_voltage = 2.5;
+                        }
+
+                        this.updateSensorDisplay(fakeData);
+                    }, 1500);
+                }
+            }
+
+            updateSensorDisplay(data) {
+                // 安全地更新DOM元素（检查元素是否存在）
+                const updateElement = (id, value) => {
+                    const el = document.getElementById(id);
+                    if (el) el.textContent = value;
+                };
+
+                // 更新温度（参考SensorCard.jsx的变色逻辑）
+                if (data.temperature !== undefined) {
+                    updateElement('temperature', data.temperature.toFixed(1));
+                    const tempCard = document.getElementById('tempCard');
+                    if (tempCard) {
+                        if (data.temperature < 20) {
+                            tempCard.className = 'device-card'; // Reset
+                            tempCard.style.borderColor = '#00f3ff'; // 蓝色
+                            tempCard.style.boxShadow = '0 0 15px rgba(0, 243, 255, 0.2)';
+                        } else if (data.temperature > 26) {
+                            tempCard.className = 'device-card';
+                            tempCard.style.borderColor = '#ff0055'; // 红色
+                            tempCard.style.boxShadow = '0 0 15px rgba(255, 0, 85, 0.3)';
+                        } else {
+                            tempCard.className = 'device-card device-on'; // 绿色正常
+                            tempCard.style.borderColor = ''; // 清除强制覆盖
+                            tempCard.style.boxShadow = '';
+                        }
+                    }
+                }
+
+                // 更新湿度
+                if (data.humidity !== undefined) {
+                    updateElement('humidity', data.humidity);
+                    const humidityCard = document.getElementById('humidityCard');
+                    if (humidityCard) {
+                        if (data.humidity < 30 || data.humidity > 70) {
+                            humidityCard.style.borderColor = '#ffcc00'; // 黄色警告
+                        } else {
+                            humidityCard.className = 'device-card device-on'; // 正常
+                            humidityCard.style.borderColor = '';
+                        }
+                    }
+                }
+
+                // 更新烟雾
+                if (data.smoke_voltage !== undefined) {
+                    updateElement('smokeVoltage', data.smoke_voltage.toFixed(2) + ' V');
+                }
+                if (data.smoke_detected !== undefined) {
+                    const indicatorEl = document.getElementById('smokeIndicator');
+                    const smokeCard = document.getElementById('smokeCard');
+                    if (indicatorEl) {
+                        if (data.smoke_detected) {
+                            indicatorEl.textContent = '⚠️ 警告';
+                            indicatorEl.className = 'status-indicator disconnected';
+                            if (smokeCard) {
+                                smokeCard.style.borderColor = '#ff0055';
+                                smokeCard.style.boxShadow = '0 0 20px rgba(255, 0, 85, 0.4)';
+                            }
+                        } else {
+                            indicatorEl.textContent = '✓ 正常';
+                            indicatorEl.className = 'status-indicator connected';
+                            if (smokeCard) {
+                                smokeCard.className = 'device-card device-on';
+                                smokeCard.style.borderColor = '';
+                                smokeCard.style.boxShadow = '';
+                            }
+                        }
+                    }
+                }
+
+                // 更新光照强度
+                if (data.light_intensity !== undefined) {
+                    updateElement('lightIntensity', data.light_intensity.toFixed(1));
+                    const lightCard = document.getElementById('lightCard');
+                    if (lightCard) {
+                        lightCard.className = 'device-card device-on'; // 默认开启亮起
+                    }
+                }
+
+                // 更新图表
+                this.updateChart(data);
+
+                // 根据传感器数据更新指示灯颜色（温度>30°C 或 烟雾高 → 红灯）
+                if (typeof updateIndicatorLightFromSensorData === 'function') {
+                    updateIndicatorLightFromSensorData(data);
+                }
+
+                // 更新时间戳
+                const timestampEl = document.getElementById('sensorTimestamp');
+                if (timestampEl) {
+                    timestampEl.textContent = `最后更新: ${new Date().toLocaleString('zh-CN')}`;
+                }
+            }
+
+            // 图表相关方法（参考DataChart.jsx）
+            initChart() {
+                const canvas = document.getElementById('sensorChart');
+                if (!canvas) return;
+
+                // 销毁旧图表实例，避免内存泄漏
+                if (this.chart) {
+                    this.chart.destroy();
+                    this.chart = null;
+                }
+
+                const ctx = canvas.getContext('2d');
+
+                // 初始化图表数据（最多保留360个数据点，约30分钟历史）
+                this.chartData = {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: '温度 (°C)',
+                            data: [],
+                            borderColor: '#ff0055', // Neon Red
+                            backgroundColor: 'rgba(255, 0, 85, 0.1)',
+                            tension: 0.5,
+                            cubicInterpolationMode: 'monotone', // 恢复水流般顺滑
+                            fill: true,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            pointHoverRadius: 6
+                        },
+                        {
+                            label: '湿度 (%)',
+                            data: [],
+                            borderColor: '#00f3ff', // Neon Cyan
+                            backgroundColor: 'rgba(0, 243, 255, 0.1)',
+                            tension: 0.5,
+                            cubicInterpolationMode: 'monotone', // 恢复水流般顺滑
+                            fill: true,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            pointHoverRadius: 6,
+                            hidden: true // 默认隐藏，点击图例显示
+                        },
+                        {
+                            label: '烟雾 (V)',
+                            data: [],
+                            borderColor: '#bc13fe', // Neon Magenta
+                            backgroundColor: 'rgba(188, 19, 254, 0.1)',
+                            tension: 0.5,
+                            cubicInterpolationMode: 'monotone', // 恢复水流般顺滑
+                            fill: true,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            pointHoverRadius: 6,
+                            hidden: true
+                        },
+                        {
+                            label: '光照 (%)',
+                            data: [],
+                            borderColor: '#00ff9d', // Neon Green
+                            backgroundColor: 'rgba(0, 255, 157, 0.1)',
+                            tension: 0.5,
+                            cubicInterpolationMode: 'monotone', // 恢复水流般顺滑
+                            fill: true,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            pointHoverRadius: 6,
+                            hidden: true
+                        }
+                    ]
+                };
+
+                // 创建Chart实例 - 赛博朋克风格
+                this.chart = new Chart(ctx, {
+                    type: 'line',
+                    data: this.chartData,
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: {
+                            duration: 1500, // 与数据更新频率一致，形成连续流动
+                            easing: 'linear' // 线性匀速流动
+                        },
+                        interaction: {
+                            mode: 'index',
+                            intersect: false,
+                        },
+                        plugins: {
+                            legend: {
+                                position: 'top',
+                                labels: {
+                                    color: '#e0e6ed',
+                                    usePointStyle: true,
+                                    font: { family: "'JetBrains Mono', monospace" }
+                                }
+                            },
+                            tooltip: {
+                                backgroundColor: 'rgba(5, 5, 16, 0.9)',
+                                titleColor: '#00f3ff',
+                                bodyColor: '#fff',
+                                borderColor: 'rgba(0, 243, 255, 0.3)',
+                                borderWidth: 1,
+                                padding: 12,
+                                displayColors: true
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                grid: {
+                                    color: 'rgba(0, 243, 255, 0.05)',
+                                    drawBorder: false
+                                },
+                                ticks: {
+                                    color: '#64748b',
+                                    font: { family: "'JetBrains Mono', monospace" }
+                                }
+                            },
+                            x: {
+                                grid: { display: false },
+                                ticks: {
+                                    color: '#64748b',
+                                    font: { family: "'JetBrains Mono', monospace" },
+                                    maxRotation: 0
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // 应用渐变填充 (Chart.js quirk: need to assign after creation or use scriptable)
+                // 这里简单处理：直接更新dataset的backgroundColor为渐变对象
+                try {
+                    const createGradient = (colorStart, colorEnd) => {
+                        const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+                        gradient.addColorStop(0, colorStart);
+                        gradient.addColorStop(1, colorEnd);
+                        return gradient;
+                    };
+
+                    this.chart.data.datasets[0].backgroundColor = createGradient('rgba(255, 0, 85, 0.5)', 'rgba(255, 0, 85, 0)');
+                    this.chart.data.datasets[1].backgroundColor = createGradient('rgba(0, 243, 255, 0.5)', 'rgba(0, 243, 255, 0)');
+                    this.chart.data.datasets[2].backgroundColor = createGradient('rgba(188, 19, 254, 0.5)', 'rgba(188, 19, 254, 0)');
+                    this.chart.data.datasets[3].backgroundColor = createGradient('rgba(0, 255, 157, 0.5)', 'rgba(0, 255, 157, 0)');
+
+                    this.chart.update();
+                } catch (e) {
+                    console.warn('Gradient application failed', e);
+                }
+            }
+
+            updateChart(data) {
+                if (!this.chart || !this.chartData || !data) return;
+
+                const timeLabel = new Date().toLocaleTimeString('zh-CN', {
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
+                });
+
+                this.chartData.labels.push(timeLabel);
+                this.chartData.datasets[0].data.push(data.temperature ?? null);
+                this.chartData.datasets[1].data.push(data.humidity ?? null);
+                this.chartData.datasets[2].data.push(data.smoke_voltage ? data.smoke_voltage * 10 : null);
+                this.chartData.datasets[3].data.push(data.light_intensity ?? null);
+
+                if (this.chartData.labels.length > 360) {
+                    this.chartData.labels.shift();
+                    this.chartData.datasets.forEach(ds => ds.data.shift());
+                }
+
+                this.chart.update(); // 启用动画更新以展示弹性效果
+            }
+
+            updateModeButtons(activeMode) {
+                const buttons = document.querySelectorAll('.btn-switch');
+                buttons.forEach((btn, index) => {
+                    btn.classList.remove('active');
+                    if (
+                        (activeMode === 'ai' && index === 0) ||
+                        (activeMode === 'sensor' && index === 1) ||
+                        (activeMode === 'control' && index === 2) ||
+                        (activeMode === 'vision' && index === 3)
+                    ) {
+                        btn.classList.add('active');
+                    }
+                });
+            }
+
+            setupControlModeEvents() {
+                // 设备控制按钮事件
+                const controlButtons = document.querySelectorAll('.control-btn[data-cmd]');
+                controlButtons.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const command = btn.getAttribute('data-cmd');
+                        this.sendDeviceCommand(command);
+                    });
+                });
+
+                // 连接按钮
+                const controlConnectBtn = document.getElementById('controlConnectBtn');
+                const controlDisconnectBtn = document.getElementById('controlDisconnectBtn');
+
+                if (controlConnectBtn) {
+                    controlConnectBtn.addEventListener('click', () => {
+                        this.connectToControlDevice();
+                    });
+                }
+
+                if (controlDisconnectBtn) {
+                    controlDisconnectBtn.addEventListener('click', () => {
+                        this.disconnectFromControlDevice();
+                    });
+                }
+
+                // 初始化智能灯开关UI（默认开启）
+                const smartLightSwitch = document.getElementById('smartLightSwitch');
+                if (smartLightSwitch && smartLightState) {
+                    smartLightSwitch.classList.add('on');
+                }
+            }
+
+            sendDeviceCommand(command) {
+                console.log('发送设备命令:', command);
+                // 这里可以通过WebSocket发送命令给下位机
+                // 如果需要,可以复用调试模式的连接管理器
+                if (window.aiManager && window.aiManager.isConnected) {
+                    const message = {
+                        type: "message",
+                        timestamp: Date.now(),
+                        data: command
+                    };
+                    // 发送命令逻辑
+                } else {
+                    alert('请先连接到设备');
+                }
+            }
+
+            connectToControlDevice() {
+                const serverUrl = document.getElementById('controlServerUrl').value.trim() || 'localhost';
+                const serverPort = document.getElementById('controlServerPort').value.trim() || '8080';
+
+                // 使用共享连接
+                this.connectSharedWebSocket(serverUrl, serverPort);
+            }
+
+            disconnectFromControlDevice() {
+                // 使用共享断开
+                this.disconnectSharedWebSocket();
+            }
+
+            switchToVisionMode() {
+                this.currentMode = 'vision';
+                this.updateModeButtons('vision');
+
+                const main = document.getElementById('mainContent');
+                main.innerHTML = `
+                    <section class="vision-section">
+                        <div class="vision-container" style="max-width: 1400px; margin: 0 auto;">
+                            <h2 style="text-align: center; color: var(--text-primary); margin-bottom: 20px;">🎥 实时视觉检测</h2>
+
+                            <!-- 状态栏 -->
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 15px 25px; background: rgba(0, 243, 255, 0.05); border-radius: 10px; margin-bottom: 25px;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <div id="visionStatusDot" style="width: 12px; height: 12px; border-radius: 50%; background: var(--neon-red);"></div>
+                                    <span id="visionStatusText">未连接</span>
+                                </div>
+                                <div style="display: flex; gap: 20px;">
+                                    <span id="visionFpsCounter">FPS: 0</span>
+                                    <span id="visionLatencyCounter">延迟: 0ms</span>
+                                </div>
+                            </div>
+
+                            <!-- 主内容区域 -->
+                            <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 25px; margin-bottom: 25px;">
+                                <!-- 视频显示区域 -->
+                                <div style="position: relative; background: #000; border-radius: 15px; overflow: hidden; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);">
+                                    <canvas id="visionCanvas" width="640" height="480" style="width: 100%; height: auto; display: block;"></canvas>
+                                    <div style="position: absolute; top: 15px; left: 15px; background: rgba(0, 0, 0, 0.7); color: white; padding: 10px 15px; border-radius: 8px; font-size: 14px;">
+                                        <div id="visionFrameInfo">等待视频流...</div>
+                                    </div>
+                                </div>
+
+                                <!-- 检测面板 -->
+                                <div style="background: rgba(0, 243, 255, 0.05); border-radius: 15px; padding: 25px;">
+                                    <!-- 统计卡片 -->
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+                                        <div id="visionHumanCard" class="device-card" style="text-align: center; padding: 20px;">
+                                            <div id="visionHumanCount" style="font-size: 2.5em; font-weight: bold; color: var(--neon-blue);">0</div>
+                                            <div style="color: var(--text-secondary); font-size: 0.9em; margin-top: 5px;">👤 检测到人</div>
+                                        </div>
+                                        <div id="visionFireCard" class="device-card" style="text-align: center; padding: 20px;">
+                                            <div id="visionFireCount" style="font-size: 2.5em; font-weight: bold; color: var(--neon-red);">0</div>
+                                            <div style="color: var(--text-secondary); font-size: 0.9em; margin-top: 5px;">🔥 检测到火</div>
+                                        </div>
+                                    </div>
+
+                                    <!-- 检测日志 -->
+                                    <div class="device-card" style="padding: 15px;">
+                                        <h3 style="margin-bottom: 10px; font-size: 1.1em;">检测日志</h3>
+                                        <div id="visionLogContainer" class="log-container" style="max-height: 300px; overflow-y: auto;"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 控制按钮 -->
+                            <div style="display: flex; gap: 15px; justify-content: center;">
+                                <button id="visionConnectBtn" class="btn-primary" style="display: none;">连接</button>
+                                <button id="visionDisconnectBtn" class="btn-secondary" style="display: none;">断开</button>
+                            </div>
+
+                            <!-- 调试信息 -->
+                            <div id="visionDebugInfo" class="log-container" style="margin-top: 20px; font-family: monospace; font-size: 0.85em; max-height: 150px;"></div>
+                        </div>
+                    </section>
+                `;
+
+                // 初始化视觉检测
+                this.setupVisionMode();
+            }
+
+            setupVisionMode() {
+                // 初始化Canvas
+                this.visionCanvas = document.getElementById('visionCanvas');
+                this.visionCtx = this.visionCanvas ? this.visionCanvas.getContext('2d') : null;
+                this.visionFrameCount = 0;
+                this.visionLastFrameTime = Date.now();
+
+                // 自动使用共享连接
+                if (this.isConnected) {
+                    this.updateVisionStatus(true);
+                    this.addVisionDebug('✅ 已使用共享WebSocket连接');
+                    this.addVisionLog('系统', '已连接到服务器');
+                } else {
+                    // 自动连接
+                    this.addVisionDebug('🔗 自动连接WebSocket...');
+                    this.connectSharedWebSocket(this.wsServer, this.wsPort);
+                }
+
+                // 添加消息处理（复用sharedWs的onmessage，但这里需要针对vision模式的处理）
+                // 注意：由于共享连接，onmessage已经在connectSharedWebSocket中设置
+                // 我们需要在那里添加对vision模式的支持
+            }
+
+            updateVisionStatus(connected) {
+                const statusDot = document.getElementById('visionStatusDot');
+                const statusText = document.getElementById('visionStatusText');
+
+                if (statusDot && statusText) {
+                    if (connected) {
+                        statusDot.style.background = 'var(--neon-green)';
+                        statusDot.style.boxShadow = '0 0 10px rgba(0, 255, 157, 0.5)';
+                        statusText.textContent = '已连接';
+                    } else {
+                        statusDot.style.background = 'var(--neon-red)';
+                        statusDot.style.boxShadow = 'none';
+                        statusText.textContent = '未连接';
+                    }
+                }
+            }
+
+            addVisionDebug(message) {
+                const debugInfo = document.getElementById('visionDebugInfo');
+                if (!debugInfo) return;
+
+                const now = new Date().toLocaleTimeString();
+                const newLine = `[${now}] ${message}\n`;
+                debugInfo.textContent = newLine + debugInfo.textContent;
+
+                // 限制行数
+                const lines = debugInfo.textContent.split('\n');
+                if (lines.length > 10) {
+                    debugInfo.textContent = lines.slice(0, 10).join('\n');
+                }
+            }
+
+            addVisionLog(type, message, isFire = false) {
+                const logContainer = document.getElementById('visionLogContainer');
+                if (!logContainer) return;
+
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString();
+
+                const logEntry = document.createElement('div');
+                logEntry.style.padding = '8px 12px';
+                logEntry.style.marginBottom = '8px';
+                logEntry.style.borderRadius = '5px';
+                logEntry.style.fontSize = '0.85em';
+                logEntry.style.borderLeft = isFire ? '4px solid var(--neon-red)' : '4px solid var(--neon-blue)';
+                logEntry.style.background = isFire ? 'rgba(255, 0, 85, 0.1)' : 'rgba(0, 243, 255, 0.1)';
+                logEntry.textContent = `[${timeStr}] ${type}: ${message}`;
+
+                logContainer.insertBefore(logEntry, logContainer.firstChild);
+
+                // 限制日志数量
+                while (logContainer.children.length > 20) {
+                    logContainer.removeChild(logContainer.lastChild);
+                }
+            }
+
+            handleVisionImageFrame(blob) {
+                if (!this.visionCanvas || !this.visionCtx) return;
+
+                this.addVisionDebug(`📷 收到图像帧: ${blob.size} 字节`);
+
+                const img = new Image();
+                img.onload = () => {
+                    this.visionCanvas.width = img.width;
+                    this.visionCanvas.height = img.height;
+                    this.visionCtx.drawImage(img, 0, 0);
+                    URL.revokeObjectURL(img.src);
+                };
+                img.src = URL.createObjectURL(blob);
+
+                // 更新FPS
+                this.visionFrameCount++;
+                const now = Date.now();
+                const elapsed = (now - this.visionLastFrameTime) / 1000;
+                if (elapsed >= 1.0) {
+                    const fps = this.visionFrameCount / elapsed;
+                    const fpsCounter = document.getElementById('visionFpsCounter');
+                    if (fpsCounter) {
+                        fpsCounter.textContent = `FPS: ${fps.toFixed(1)}`;
+                    }
+                    this.visionFrameCount = 0;
+                    this.visionLastFrameTime = now;
+                }
+
+                // 更新帧信息
+                const frameInfo = document.getElementById('visionFrameInfo');
+                if (frameInfo) {
+                    frameInfo.textContent = `图像大小: ${(blob.size / 1024).toFixed(1)} KB`;
+                }
+            }
+
+            handleVisionTextMessage(data) {
+                this.addVisionDebug(`处理消息类型: ${data.type}`);
+
+                if (data.type === 'ai_detection') {
+                    const detections = data.data.detections;
+                    let humans = 0;
+                    let fires = 0;
+
+                    detections.forEach(det => {
+                        if (det.class_id === 0) humans++;
+                        else fires++;
+                    });
+
+                    this.addVisionDebug(`🎯 检测: ${humans}人, ${fires}火`);
+
+                    // 更新统计
+                    const humanCount = document.getElementById('visionHumanCount');
+                    const fireCount = document.getElementById('visionFireCount');
+                    const humanCard = document.getElementById('visionHumanCard');
+                    const fireCard = document.getElementById('visionFireCard');
+
+                    if (humanCount) humanCount.textContent = humans;
+                    if (fireCount) fireCount.textContent = fires;
+
+                    // 高亮动画
+                    if (humans > 0 && humanCard) {
+                        humanCard.style.transform = 'scale(1.05)';
+                        humanCard.style.boxShadow = '0 4px 20px rgba(0, 243, 255, 0.4)';
+                        setTimeout(() => {
+                            humanCard.style.transform = '';
+                            humanCard.style.boxShadow = '';
+                        }, 500);
+                    }
+                    if (fires > 0 && fireCard) {
+                        fireCard.style.transform = 'scale(1.05)';
+                        fireCard.style.boxShadow = '0 4px 20px rgba(255, 0, 85, 0.4)';
+                        setTimeout(() => {
+                            fireCard.style.transform = '';
+                            fireCard.style.boxShadow = '';
+                        }, 500);
+                    }
+
+                    // 计算延迟
+                    const latency = Date.now() - data.timestamp;
+                    const latencyCounter = document.getElementById('visionLatencyCounter');
+                    if (latencyCounter) {
+                        latencyCounter.textContent = `延迟: ${latency}ms`;
+                    }
+
+                    // 添加日志
+                    if (humans > 0) {
+                        this.addVisionLog('检测', `发现 ${humans} 个人`, false);
+                    }
+                    if (fires > 0) {
+                        this.addVisionLog('警报', `发现 ${fires} 处火源！`, true);
+                    }
+                } else if (data.type === 'system') {
+                    this.addVisionDebug(`系统消息: ${data.data}`);
+                    this.addVisionLog('系统', data.data);
+                }
+            }
+        }
+
+        // 全局函数
+        function switchToAIMode() {
+            modeManager.switchToAIMode();
+        }
+
+        function switchToSensorMode() {
+            modeManager.switchToSensorMode();
+        }
+
+        function switchToControlMode() {
+            modeManager.switchToControlMode();
+        }
+
+        function switchToVisionMode() {
+            modeManager.switchToVisionMode();
+        }
+
+        // 控制模式全局函数
+
+        // 设备开关状态
+        let fanEnabled = false;
+        let windowEnabled = false;
+        let indicatorLightEnabled = true;  // 默认开启，与ESP32同步
+
+        // ========== 风扇控制（电机）==========
+        function toggleFan(enabled) {
+            fanEnabled = enabled;
+            const statusEl = document.getElementById('fanStatus');
+            const controlArea = document.getElementById('fanControlArea');
+            const onBtn = document.getElementById('fanOnBtn');
+            const offBtn = document.getElementById('fanOffBtn');
+
+            if (enabled) {
+                statusEl.textContent = '开启';
+                statusEl.style.color = '#30d158';
+                controlArea.style.opacity = '1';
+                controlArea.style.pointerEvents = 'auto';
+                onBtn.style.opacity = '0.5';
+                offBtn.style.opacity = '1';
+
+                // 发送当前滑块的速度值
+                const speed = parseInt(document.getElementById('fanSpeed').value);
+                document.getElementById('fanSpeedValue').textContent = `${speed}%`;
+                document.getElementById('fanPWM').textContent = `${speed}%`;
+                const command = `MOTOR_${speed}`;
+                sendControlCommand(command);
+                console.log(`🌀 风扇已开启，转速: ${speed}%`);
+            } else {
+                statusEl.textContent = '关闭';
+                statusEl.style.color = '#ff3b30';
+                controlArea.style.opacity = '0.5';
+                controlArea.style.pointerEvents = 'none';
+                onBtn.style.opacity = '1';
+                offBtn.style.opacity = '0.5';
+
+                // 发送停止命令
+                const command = 'MOTOR_0';
+                sendControlCommand(command);
+                document.getElementById('fanSpeedValue').textContent = '0%';
+                document.getElementById('fanPWM').textContent = '0%';
+                console.log('🌀 风扇已关闭');
+            }
+        }
+
+        function updateFanSpeed(speed) {
+            if (!fanEnabled) return;  // 未开启时不响应
+
+            const speedValue = parseInt(speed);
+            document.getElementById('fanSpeedValue').textContent = `${speedValue}%`;
+            document.getElementById('fanPWM').textContent = `${speedValue}%`;
+
+            // 发送命令到ESP32
+            const command = `MOTOR_${speedValue}`;
+            sendControlCommand(command);
+        }
+
+        function setFanSpeed(speed) {
+            if (!fanEnabled) return;  // 未开启时不响应
+            document.getElementById('fanSpeed').value = speed;
+            updateFanSpeed(speed);
+        }
+
+        // ========== 窗户控制（舵机）==========
+        function toggleWindow(enabled) {
+            windowEnabled = enabled;
+            const statusEl = document.getElementById('windowStatus');
+            const controlArea = document.getElementById('windowControlArea');
+            const onBtn = document.getElementById('windowOnBtn');
+            const offBtn = document.getElementById('windowOffBtn');
+
+            if (enabled) {
+                statusEl.textContent = '开启';
+                statusEl.style.color = '#30d158';
+                controlArea.style.opacity = '1';
+                controlArea.style.pointerEvents = 'auto';
+                onBtn.style.opacity = '0.5';
+                offBtn.style.opacity = '1';
+
+                // 发送当前滑块的角度值
+                const angle = parseInt(document.getElementById('windowAngle').value);
+                document.getElementById('windowAngleValue').textContent = `${angle}°`;
+                document.getElementById('servoPWM').textContent = `${angle}°`;
+                const command = `SERVO_${angle}`;
+                sendControlCommand(command);
+                console.log(`🪟 窗户已开启，角度: ${angle}°`);
+            } else {
+                statusEl.textContent = '关闭';
+                statusEl.style.color = '#ff3b30';
+                controlArea.style.opacity = '0.5';
+                controlArea.style.pointerEvents = 'none';
+                onBtn.style.opacity = '1';
+                offBtn.style.opacity = '0.5';
+
+                // 发送0度命令（关闭窗户）
+                const command = 'SERVO_0';
+                sendControlCommand(command);
+                document.getElementById('windowAngleValue').textContent = '0°';
+                document.getElementById('servoPWM').textContent = '0°';
+                console.log('🪟 窗户已关闭');
+            }
+        }
+
+        function updateWindowAngle(angle) {
+            if (!windowEnabled) return;  // 未开启时不响应
+
+            const angleValue = parseInt(angle);
+            document.getElementById('windowAngleValue').textContent = `${angleValue}°`;
+            document.getElementById('servoPWM').textContent = `${angleValue}°`;
+
+            // 发送命令到ESP32
+            const command = `SERVO_${angleValue}`;
+            sendControlCommand(command);
+        }
+
+        function setWindowAngle(angle) {
+            if (!windowEnabled) return;  // 未开启时不响应
+            document.getElementById('windowAngle').value = angle;
+            updateWindowAngle(angle);
+        }
+
+        // ========== 指示灯控制 ==========
+        let currentIndicatorColor = 'green';  // 当前指示灯颜色
+
+        function toggleIndicatorLight(enabled) {
+            indicatorLightEnabled = enabled;
+
+            // 更新UI
+            const statusEl = document.getElementById('ledPowerStatus');
+            const colorEl = document.getElementById('indicatorLightColor');
+            const onBtn = document.getElementById('ledOnBtn');
+            const offBtn = document.getElementById('ledOffBtn');
+
+            if (enabled) {
+                statusEl.textContent = '开启';
+                statusEl.style.color = '#30d158';
+                onBtn.style.opacity = '0.5';
+                offBtn.style.opacity = '1';
+                // 恢复之前的颜色
+                updateIndicatorLightUI(currentIndicatorColor);
+                const command = 'LED_ON';
+                sendControlCommand(command);
+                console.log('💡 指示灯已开启');
+            } else {
+                statusEl.textContent = '关闭';
+                statusEl.style.color = '#ff3b30';
+                onBtn.style.opacity = '1';
+                offBtn.style.opacity = '0.5';
+                // 关闭时显示灰色
+                colorEl.style.background = '#8e8e93';
+                colorEl.style.boxShadow = '0 0 10px rgba(142, 142, 147, 0.3)';
+                const command = 'LED_OFF';
+                sendControlCommand(command);
+                console.log('💡 指示灯已关闭');
+            }
+        }
+
+        function updateIndicatorLightUI(color) {
+            currentIndicatorColor = color;
+            if (!indicatorLightEnabled) return;
+
+            const colorEl = document.getElementById('indicatorLightColor');
+            const statusEl = document.getElementById('indicatorLightStatus');
+
+            if (color === 'green') {
+                colorEl.style.background = '#34c759';
+                colorEl.style.boxShadow = '0 0 20px rgba(52, 199, 89, 0.6)';
+                statusEl.textContent = '状态：正常';
+                statusEl.style.color = '#34c759';
+            } else if (color === 'red') {
+                colorEl.style.background = '#ff3b30';
+                colorEl.style.boxShadow = '0 0 20px rgba(255, 59, 48, 0.6)';
+                statusEl.textContent = '状态：警戒';
+                statusEl.style.color = '#ff3b30';
+            }
+        }
+
+        // 根据传感器数据更新指示灯（温度>30°C 或 烟雾高 → 红灯）
+        function updateIndicatorLightFromSensorData(data) {
+            if (!indicatorLightEnabled) return;
+
+            const isAlert = (data.temperature > 30) || (data.smoke_detected === true);
+            const newColor = isAlert ? 'red' : 'green';
+
+            // 只有颜色变化时才更新UI和发送命令
+            if (newColor !== currentIndicatorColor) {
+                currentIndicatorColor = newColor;
+                updateIndicatorLightUI(newColor);
+
+                // 发送颜色命令到ESP32
+                const command = newColor === 'red' ? 'LED_RED' : 'LED_GREEN';
+                sendControlCommand(command);
+            }
+        }
+
+        // 通用控制命令发送函数
+        function sendControlCommand(command) {
+            const timestamp = new Date().toLocaleTimeString();
+
+            // 添加日志到显示区域
+            const logEl = document.getElementById('commandLog');
+            if (logEl) {
+                const logEntry = document.createElement('div');
+                logEntry.style.marginBottom = '4px';
+
+                if (modeManager.isConnected) {
+                    logEntry.innerHTML = `<span style="color: #30d158;">✓</span> [${timestamp}] ${command}`;
+                    modeManager.sendMessage(command);
+                    console.log('✓ 发送命令:', command);
+                } else {
+                    logEntry.innerHTML = `<span style="color: #ff3b30;">✗</span> [${timestamp}] ${command} <span style="color: #8e8e93;">(未连接)</span>`;
+                    console.log('✗ 未连接，无法发送命令:', command);
+                }
+
+                // 清空"等待发送命令..."提示
+                if (logEl.querySelector('div[style*="color: #8e8e93"]')) {
+                    logEl.innerHTML = '';
+                }
+
+                logEl.appendChild(logEntry);
+                // 自动滚动到底部
+                logEl.scrollTop = logEl.scrollHeight;
+            }
+        }
+
+        // 清空命令日志
+        function clearCommandLog() {
+            const logEl = document.getElementById('commandLog');
+            if (logEl) {
+                logEl.innerHTML = '<div style="color: #8e8e93;">等待发送命令...</div>';
+            }
+        }
+
+        // 初始化
+        const modeManager = new ModeManager();
+        document.addEventListener('DOMContentLoaded', () => {
+            modeManager.init();
+        });
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,28 @@
+# Build output
+build/
+sdkconfig.old
+
+# Claude config
+.claude/
+CLAUDE.md
+
+# IDE
+.vscode/
+.idea/
+
+# Node modules
+web/server/node_modules/
+
+# Managed components (can be re-downloaded)
+managed_components/
+
+# Log files
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak

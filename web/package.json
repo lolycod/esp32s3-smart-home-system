@@ -1,0 +1,27 @@
+{
+  "name": "smart-terminal-manager",
+  "version": "1.0.0",
+  "description": "智能终端管理系统 - 前后端分离架构",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "cd server && npm start",
+    "server": "cd server && npm start",
+    "client": "cd server && node -e \"console.log('请访问 http://localhost:8080 使用Web界面')\"",
+    "dev": "cd server && npm start",
+    "stop": "pkill -f server.js || taskkill /F /IM node.exe",
+    "install-all": "cd server && npm install",
+    "test": "cd server && npm test"
+  },
+  "keywords": [
+    "websocket",
+    "terminal",
+    "nodejs",
+    "management-system",
+    "real-time-communication"
+  ],
+  "author": "智能终端管理系统",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
