@@ -152,9 +152,12 @@ static esp_err_t init_services(void)
         .mq2_adc_channel = 5,
         .ldr_do_gpio = 8,         // 5516光敏电阻DO数字输出
         .ldr_adc_channel = 6,     // 5516光敏电阻AO模拟输出 (GPIO7=ADC1_CH6)
-        .sample_interval_ms = 5000,
+        .co2_uart_tx_gpio = 10,   // JW01 CO2传感器 TX引脚
+        .co2_uart_rx_gpio = 9,    // JW01 CO2传感器 RX引脚
+        .co2_uart_num = 1,        // 使用UART1
+        .sample_interval_ms = 2000, // 提高采样频率至 2秒一次
         .data_queue = s_sensor_data_queue,
-        .websocket_uri = "ws://192.168.183.121:8080",  // 修改为你的PC IP地址
+        .websocket_uri = "ws://192.168.102.121:8080",  // 自动更新为当前WiFi IP
     };
     ret = sensor_service_init(&sensor_cfg);
     if (ret != ESP_OK) {

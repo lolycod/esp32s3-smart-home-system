@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <rect width="200" height="200" fill="#050510"/>
+  <circle cx="100" cy="100" r="80" stroke="#00f3ff" stroke-width="2" fill="none" opacity="0.5"/>
+  <circle cx="100" cy="100" r="60" stroke="#bc13fe" stroke-width="2" fill="none" opacity="0.3"/>
+  <path d="M70,80 L130,80 L130,120 L70,120 Z" stroke="#00f3ff" stroke-width="4" fill="none"/>
+  <circle cx="100" cy="100" r="15" fill="#00f3ff"/>
+  <text x="100" y="160" font-family="monospace" font-size="14" fill="#00f3ff" text-anchor="middle" letter-spacing="2">NO SIGNAL</text>
+</svg>

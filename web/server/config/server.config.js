@@ -23,37 +23,39 @@ const config = {
     // 静态文件目录（相对于服务器根目录）
     staticPath: '../client'
   },
-  
+
   // WebSocket配置
   websocket: {
     // 最大连接数
     maxConnections: 100,
-    
+
     // 连接超时时间（毫秒）
     connectionTimeout: 30000,
-    
+
     // 心跳间隔（毫秒）
     heartbeatInterval: 30000
   },
-  
+
   // 消息配置
   message: {
     // 最大消息大小（字节）
     maxSize: 1024 * 1024, // 1MB
-    
+
     // 消息类型
     types: {
       MESSAGE: 'message',
       SYSTEM: 'system',
-      ERROR: 'error'
+      ERROR: 'error',
+      AI_DETECTION: 'ai_detection',  // MaixCAM AI检测结果
+      GESTURE_CONTROL: 'gesture_control'  // MaixCAM 手势控制
     }
   },
-  
+
   // 日志配置
   logging: {
     // 是否启用日志
     enabled: true,
-    
+
     // 日志级别
     level: 'info'
   }

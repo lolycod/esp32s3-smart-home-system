@@ -33,7 +33,7 @@ class MessageHandler {
             // 解析消息
             const messageStr = rawData.toString();
             let message;
-            
+
             try {
                 message = JSON.parse(messageStr);
             } catch (parseError) {
@@ -54,7 +54,7 @@ class MessageHandler {
 
             // 获取发送者信息
             const senderInfo = this.getSenderInfo(senderWs);
-            
+
             // 处理不同类型的消息
             const processResult = this.handleMessageByType(message, senderInfo);
             if (!processResult.success) {
@@ -63,14 +63,15 @@ class MessageHandler {
 
             // 准备转发的消息
             const forwardMessage = this.prepareForwardMessage(message, senderInfo);
-            
+
             // 转发消息
             const forwardResult = this.forwardMessage(forwardMessage, senderWs);
 
             // 记录消息历史
             this.recordMessage(forwardMessage, senderInfo, forwardResult);
 
-            console.log(`📨 消息处理完成: 类型=${message.type}, 发送者=${senderInfo.id}, 转发=${forwardResult.successCount}个客户端`);
+            const senderId = senderInfo ? senderInfo.id : 'unknown';
+            console.log(`📨 消息处理完成: 类型=${message.type}, 发送者=${senderId}, 转发=${forwardResult.successCount}个客户端`);
 
             return {
                 success: true,
@@ -169,19 +170,52 @@ class MessageHandler {
         switch (message.type) {
             case this.messageTypes.MESSAGE:
                 return this.handleUserMessage(message, senderInfo);
-            
+
             case this.messageTypes.SYSTEM:
                 return this.handleSystemMessage(message, senderInfo);
-            
+
             case this.messageTypes.ERROR:
                 return this.handleErrorMessage(message, senderInfo);
-            
+
+            case this.messageTypes.AI_DETECTION:
+                return this.handleAIDetectionMessage(message, senderInfo);
+
             default:
                 return {
                     success: false,
                     error: `不支持的消息类型: ${message.type}`
                 };
         }
+    }
+
+    /**
+     * 处理AI检测消息（来自MaixCAM）
+     * @param {Object} message - 消息对象
+     * @param {Object} senderInfo - 发送者信息
+     * @returns {Object} 处理结果
+     */
+    handleAIDetectionMessage(message, senderInfo) {
+        // 验证AI检测数据结构
+        if (typeof message.data !== 'object' || message.data === null) {
+            return {
+                success: false,
+                error: 'AI检测消息data字段必须是对象'
+            };
+        }
+
+        if (!Array.isArray(message.data.detections)) {
+            return {
+                success: false,
+                error: 'AI检测消息必须包含detections数组'
+            };
+        }
+
+        // 修复：处理senderInfo为null的情况（连接可能已断开但消息还在处理）
+        const senderId = senderInfo ? senderInfo.id : 'unknown';
+        console.log(`🎯 接收到AI检测数据: ${senderId}, 检测数量: ${message.data.detections.length}`);
+
+        // AI检测消息直接广播，不需要额外处理
+        return { success: true };
     }
 
     /**
@@ -213,11 +247,11 @@ class MessageHandler {
             const filteredData = this.filterMessageContent(message.data);
             if (filteredData !== message.data) {
                 message.data = filteredData;
-                console.log(`🔍 消息内容已过滤: ${senderInfo.id}`);
+                console.log(`🔍 消息内容已过滤: ${senderInfo ? senderInfo.id : 'unknown'}`);
             }
         } else if (typeof message.data === 'object' && message.data !== null) {
             // 对象类型的data（如传感器数据），直接通过验证
-            console.log(`📊 接收到结构化数据: ${senderInfo.id}`);
+            console.log(`📊 接收到结构化数据: ${senderInfo ? senderInfo.id : 'unknown'}`);
         } else {
             // data既不是字符串也不是对象
             return {
@@ -237,12 +271,12 @@ class MessageHandler {
      */
     handleSystemMessage(message, senderInfo) {
         // 系统消息通常由服务器生成，客户端发送的系统消息需要特殊处理
-        console.log(`⚠️  客户端 ${senderInfo.id} 尝试发送系统消息`);
-        
+        console.log(`⚠️  客户端 ${senderInfo ? senderInfo.id : 'unknown'} 尝试发送系统消息`);
+
         // 可以选择拒绝或者转换为普通消息
         message.type = this.messageTypes.MESSAGE;
         message.data = `[系统消息] ${message.data}`;
-        
+
         return { success: true };
     }
 
@@ -254,12 +288,12 @@ class MessageHandler {
      */
     handleErrorMessage(message, senderInfo) {
         // 错误消息通常由服务器生成，记录客户端发送的错误消息
-        console.log(`⚠️  客户端 ${senderInfo.id} 发送错误消息:`, message.data);
-        
+        console.log(`⚠️  客户端 ${senderInfo ? senderInfo.id : 'unknown'} 发送错误消息:`, message.data);
+
         // 转换为普通消息
         message.type = this.messageTypes.MESSAGE;
         message.data = `[错误报告] ${message.data}`;
-        
+
         return { success: true };
     }
 
@@ -275,7 +309,7 @@ class MessageHandler {
             timestamp: Date.now(), // 使用服务器时间戳
             data: originalMessage.data,
             sender: senderInfo ? {
-                id: senderInfo.id,
+                id: senderInfo ? senderInfo.id : 'unknown',
                 ip: senderInfo.clientInfo?.ip || 'unknown',
                 connectedAt: senderInfo.connectedAt
             } : {
@@ -306,7 +340,7 @@ class MessageHandler {
 
         // 使用ConnectionManager广播消息
         const successCount = this.connectionManager.broadcastToAll(message, excludeConnectionId);
-        
+
         return {
             successCount: successCount,
             totalConnections: this.connectionManager.getConnectionCount(),
@@ -332,17 +366,17 @@ class MessageHandler {
     filterMessageContent(content) {
         // 简单的内容过滤示例
         // 可以根据需要添加更复杂的过滤逻辑
-        
+
         // 移除多余的空白字符
         let filtered = content.trim().replace(/\s+/g, ' ');
-        
+
         // 简单的敏感词过滤（示例）
         const sensitiveWords = ['spam', 'abuse'];
         sensitiveWords.forEach(word => {
             const regex = new RegExp(word, 'gi');
             filtered = filtered.replace(regex, '*'.repeat(word.length));
         });
-        
+
         return filtered;
     }
 
@@ -404,7 +438,7 @@ class MessageHandler {
             recentMessages: recentMessages.length,
             dailyMessages: dailyMessages.length,
             messagesByType: typeStats,
-            averageForwardCount: this.messageHistory.length > 0 
+            averageForwardCount: this.messageHistory.length > 0
                 ? (this.messageHistory.reduce((sum, msg) => sum + msg.forwardCount, 0) / this.messageHistory.length).toFixed(2)
                 : 0,
             historySize: this.messageHistory.length,
@@ -420,11 +454,11 @@ class MessageHandler {
      */
     getMessageHistory(limit = 50, type = null) {
         let history = [...this.messageHistory];
-        
+
         if (type) {
             history = history.filter(msg => msg.type === type);
         }
-        
+
         return history
             .sort((a, b) => b.timestamp - a.timestamp)
             .slice(0, limit);
@@ -459,11 +493,11 @@ class MessageHandler {
         };
 
         const result = this.connectionManager.broadcastToAll(systemMessage);
-        
+
         // 记录系统消息
-        this.recordMessage(systemMessage, { 
-            id: 'system', 
-            clientInfo: { ip: 'server' } 
+        this.recordMessage(systemMessage, {
+            id: 'system',
+            clientInfo: { ip: 'server' }
         }, result);
 
         return {

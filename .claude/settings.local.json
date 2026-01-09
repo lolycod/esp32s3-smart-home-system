@@ -35,7 +35,15 @@
       "Bash(cmd.exe /c \"D:\\esp32-idf-ahy\\5.1.2\\python_env\\idf5.1_py3.11_env\\Scripts\\python.exe D:\\esp32-idf-ahy\\5.1.2\\tools\\idf.py build 2>&1\":*)",
       "Bash(git init:*)",
       "Bash(git remote add:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nfeat: 小月智能家居系统 - ESP32-S3\n\n主要功能:\n- ESP32-S3下位机固件（DHT11温湿度、MQ-2烟雾、光敏传感器）\n- 电机/舵机控制（风扇、窗户）\n- RGB指示灯状态显示\n- WebSocket实时通信\n- Web控制界面（赛博朋克风格）\n- AI对话控制（智谱GLM-4大模型）\n- TTS语音播报\n\n技术栈:\n- ESP-IDF 5.1.2\n- FreeRTOS\n- Node.js WebSocket服务器\n- Chart.js数据可视化\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git config:*)",
+      "Bash(git push:*)",
+      "Bash(git rm:*)",
+      "Bash(if exist \"web\\.git\" rmdir /s /q \"web\\.git\")",
+      "Bash(git commit:*)",
+      "Bash(git ls-tree:*)",
+      "mcp__fetch__fetch"
     ],
     "deny": [],
     "ask": []

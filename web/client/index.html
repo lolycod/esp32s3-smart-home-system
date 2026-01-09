@@ -18,6 +18,7 @@
                 <button class="btn-switch active" onclick="switchToAIMode()">AI对话</button>
                 <button class="btn-switch" onclick="switchToSensorMode()">传感器监控</button>
                 <button class="btn-switch" onclick="switchToControlMode()">控制模式</button>
+                <button class="btn-switch" onclick="switchToVisionMode()">🎥 视觉检测</button>
             </div>
         </header>
 
@@ -27,11 +28,13 @@
     </div>
 
     <!-- 引入JavaScript文件 -->
-    <script src="js/ConnectionManager.js"></script>
-    <script src="js/UIManager.js"></script>
+    <!-- 由于 index.html 内部已经集成了 ModeManager，以下旧版脚本会导致冲突，故暂时禁用 -->
+    <!-- <script src="js/ConnectionManager.js"></script> -->
+    <!-- <script src="js/UIManager.js"></script> -->
     <script src="js/TTSClient.js"></script>
     <script src="js/AIManager.js"></script>
-    <script src="js/App.js"></script>
+    <script src="js/GestureVoiceManager.js"></script>
+    <!-- <script src="js/App.js"></script> -->
 
     <script>
         // 模式管理器
@@ -48,6 +51,39 @@
 
                 // 保存最后接收的传感器数据
                 this.lastSensorData = null;
+
+                // ========== 自动安防系统 (Auto Safety Mode) ==========
+                this.autoSafetyEnabled = false;  // 总开关
+
+                // 自动化规则阈值 (比赛演示用，阈值调低便于触发)
+                this.autoRules = {
+                    // 🔥 火焰检测 → 安全模式
+                    fireDetection: {
+                        enabled: true,
+                        action: '关闭窗户 + 红色警报'
+                    },
+                    // 🌡️ 高温 → 开风扇
+                    highTemperature: {
+                        enabled: true,
+                        threshold: 28,  // 比赛演示用（正常可设30）
+                        action: '开启风扇'
+                    },
+                    // 💧 高湿度(回南天) → 关窗
+                    highHumidity: {
+                        enabled: true,
+                        threshold: 75,  // 比赛演示用
+                        action: '关闭窗户防潮'
+                    },
+                    // 👤 人员检测 → 开灯
+                    humanDetection: {
+                        enabled: true,
+                        action: '开启照明'
+                    }
+                };
+
+                // 防止重复触发的冷却时间 (毫秒)
+                this.ruleCooldowns = {};
+                this.cooldownTime = 10000; // 10秒内不重复触发同一规则
             }
 
             init() {
@@ -84,10 +120,56 @@
                 }
 
                 this.sharedWs.onmessage = (event) => {
+                    // 检查是否为二进制消息（JPEG图像帧）
+                    if (event.data instanceof Blob) {
+                        console.log('📷 收到图像帧:', event.data.size, '字节');
+                        // 仅在vision模式下处理图像帧
+                        if (this.currentMode === 'vision') {
+                            this.handleVisionImageFrame(event.data);
+                        }
+                        return;
+                    }
+
+                    // 文本消息处理
                     console.log('📥 收到消息:', event.data);
                     try {
                         const message = JSON.parse(event.data);
-                        // 处理传感器数据消息（同时更新所有页面）
+
+                        // AI检测数据 - 发送到vision模式
+                        if (message.type === 'ai_detection') {
+                            // 视觉模式下更新显示
+                            if (this.currentMode === 'vision') {
+                                this.handleVisionTextMessage(message);
+                            }
+
+                            // 🔥 自动安防: AI火焰检测
+                            if (this.autoSafetyEnabled && this.autoRules.fireDetection.enabled) {
+                                const detections = message.data?.detections || [];
+                                const fireCount = detections.filter(d => d.class_id !== 0).length; // 非人类=火焰
+
+                                if (fireCount > 0) {
+                                    this.triggerAutoAction('aiFireDetection', '🔥 AI视觉火焰警报',
+                                        `摄像头检测到 ${fireCount} 处火源，启动安全模式`,
+                                        () => {
+                                            // 关闭窗户
+                                            if (typeof toggleWindow === 'function') toggleWindow(false);
+                                            // 可以添加更多安全动作
+                                        });
+                                }
+                            }
+                            return;
+                        }
+
+                        // 手势控制消息 - 发送到GestureVoiceManager
+                        if (message.type === 'gesture_control') {
+                            console.log('✋ 收到手势控制消息:', message);
+                            if (window.gestureVoiceManager) {
+                                window.gestureVoiceManager.handleGestureMessage(message);
+                            }
+                            return;
+                        }
+
+                        // 传感器数据消息（同时更新所有页面）
                         if (message.type === 'message' && message.data && typeof message.data === 'object') {
                             // 保存最后的数据
                             this.lastSensorData = message.data;
@@ -100,6 +182,11 @@
                             if (tempEl && message.data.temperature !== undefined) {
                                 tempEl.textContent = `${message.data.temperature.toFixed(1)}°C`;
                             }
+                        }
+
+                        // 系统消息 - 发送到vision模式
+                        if (message.type === 'system' && this.currentMode === 'vision') {
+                            this.handleVisionTextMessage(message);
                         }
                     } catch (e) {
                         console.error('消息解析失败:', e);
@@ -176,6 +263,9 @@
                 disconnectButtons.forEach(btn => {
                     if (btn) btn.disabled = !connected;
                 });
+
+                // 更新 vision 模式的状态
+                this.updateVisionStatus(connected);
             }
 
             sendMessage(data) {
@@ -272,6 +362,40 @@
                                         <button id="controlConnectBtn" class="btn-primary">连接</button>
                                         <button id="controlDisconnectBtn" class="btn-secondary" disabled>断开连接</button>
                                         <span id="controlConnectionStatus" class="connection-status disconnected">未连接</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 🛡️ 自动安防模式面板 -->
+                            <div class="device-control-panel" style="margin: 20px 0; border: 1px solid var(--neon-green); background: rgba(0, 255, 157, 0.03);">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                                    <h3 style="border-left-color: var(--neon-green); margin: 0;">🛡️ 自动安防模式</h3>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="autoSafetyToggle" onchange="modeManager.toggleAutoSafety(this.checked)">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                
+                                <div id="autoSafetyStatus" style="display: none; font-size: 12px; color: var(--neon-green); text-align: center; padding: 10px; background: rgba(0, 255, 157, 0.1); border-radius: 6px; margin-bottom: 15px;">
+                                    🛡️ 自动安防已激活 - 系统将自动响应异常
+                                </div>
+                                
+                                <div style="font-size: 13px; color: var(--text-secondary); line-height: 1.8;">
+                                    <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed rgba(255,255,255,0.1);">
+                                        <span>🌡️ 高温警报</span>
+                                        <span style="color: var(--neon-cyan);">温度 > <strong>28°C</strong> → 自动开风扇</span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed rgba(255,255,255,0.1);">
+                                        <span>💧 回南天模式</span>
+                                        <span style="color: var(--neon-cyan);">湿度 > <strong>75%</strong> → 自动关窗</span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed rgba(255,255,255,0.1);">
+                                        <span>🔥 烟雾警报</span>
+                                        <span style="color: var(--neon-red);">检测到烟雾 → 关窗 + 警报</span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; padding: 8px 0;">
+                                        <span>🔥 AI视觉火焰</span>
+                                        <span style="color: var(--neon-red);">摄像头检测到火 → 安全模式</span>
                                     </div>
                                 </div>
                             </div>
@@ -504,6 +628,17 @@
                                 <div id="lightIntensity" style="font-size: 36px; font-weight: 600; color: var(--text-primary);">--</div>
                                 <div class="detail-label">%</div>
                             </div>
+
+                            <!-- CO2浓度卡片 -->
+                            <div class="device-card" id="co2Card">
+                                <svg class="tech-icon" viewBox="0 0 24 24">
+                                    <path d="M17 16h-4v-4h4v4zm2 2H5V6h14v12zM5 4h14c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" opacity="0.5"/>
+                                    <text x="12" y="14" text-anchor="middle" font-size="6" fill="currentColor">CO₂</text>
+                                </svg>
+                                <div class="detail-label">CO₂ 浓度</div>
+                                <div id="co2Value" style="font-size: 36px; font-weight: 600; color: var(--text-primary);">--</div>
+                                <div class="detail-label">ppm</div>
+                            </div>
                         </div>
 
                         <!-- 数据曲线图 -->
@@ -618,7 +753,8 @@
                             humidity: 50 + Math.random() * 20 - 10,
                             smoke_voltage: 0.2 + Math.random() * 0.1,
                             smoke_detected: false,
-                            light_intensity: 30 + Math.random() * 50
+                            light_intensity: 30 + Math.random() * 50,
+                            co2_ppm: Math.floor(400 + Math.random() * 600)  // 400-1000 ppm
                         };
 
                         // 偶尔触发报警
@@ -710,6 +846,28 @@
                     }
                 }
 
+                // 更新CO2浓度
+                if (data.co2_ppm !== undefined) {
+                    updateElement('co2Value', data.co2_ppm);
+                    const co2Card = document.getElementById('co2Card');
+                    if (co2Card) {
+                        if (data.co2_ppm > 1000) {
+                            // CO2过高，需要通风
+                            co2Card.style.borderColor = '#ff0055';
+                            co2Card.style.boxShadow = '0 0 15px rgba(255, 0, 85, 0.3)';
+                        } else if (data.co2_ppm > 800) {
+                            // CO2较高，警告
+                            co2Card.style.borderColor = '#ffcc00';
+                            co2Card.style.boxShadow = '0 0 15px rgba(255, 204, 0, 0.3)';
+                        } else {
+                            // CO2正常
+                            co2Card.className = 'device-card device-on';
+                            co2Card.style.borderColor = '';
+                            co2Card.style.boxShadow = '';
+                        }
+                    }
+                }
+
                 // 更新图表
                 this.updateChart(data);
 
@@ -722,6 +880,135 @@
                 const timestampEl = document.getElementById('sensorTimestamp');
                 if (timestampEl) {
                     timestampEl.textContent = `最后更新: ${new Date().toLocaleString('zh-CN')}`;
+                }
+
+                // ========== 自动安防规则检查 ==========
+                if (this.autoSafetyEnabled) {
+                    this.evaluateAutomationRules(data);
+                }
+            }
+
+            // ========== 自动化规则评估引擎 ==========
+            evaluateAutomationRules(data) {
+                const now = Date.now();
+
+                // 规则1: 高温 → 开风扇
+                if (this.autoRules.highTemperature.enabled && data.temperature !== undefined) {
+                    if (data.temperature > this.autoRules.highTemperature.threshold) {
+                        this.triggerAutoAction('highTemp', '🌡️ 高温警报',
+                            `温度 ${data.temperature.toFixed(1)}°C 超过阈值 ${this.autoRules.highTemperature.threshold}°C`,
+                            () => {
+                                // 开启风扇
+                                if (typeof toggleFan === 'function') toggleFan(true);
+                                if (typeof setFanSpeed === 'function') setFanSpeed(80);
+                            });
+                    }
+                }
+
+                // 规则2: 高湿度(回南天) → 关窗
+                if (this.autoRules.highHumidity.enabled && data.humidity !== undefined) {
+                    if (data.humidity > this.autoRules.highHumidity.threshold) {
+                        this.triggerAutoAction('highHumidity', '💧 回南天模式',
+                            `湿度 ${data.humidity}% 超过阈值 ${this.autoRules.highHumidity.threshold}%，自动关窗防潮`,
+                            () => {
+                                // 关闭窗户 (舵机归零)
+                                if (typeof toggleWindow === 'function') toggleWindow(false);
+                            });
+                    }
+                }
+
+                // 规则3: 烟雾检测 → 安全模式
+                if (this.autoRules.fireDetection.enabled && data.smoke_detected) {
+                    this.triggerAutoAction('smokeDetected', '🔥 烟雾警报',
+                        '检测到烟雾，启动安全模式：关窗 + 红色警报',
+                        () => {
+                            // 关闭窗户
+                            if (typeof toggleWindow === 'function') toggleWindow(false);
+                            // 这里可以添加警报灯控制
+                        });
+                }
+            }
+
+            // 触发自动动作（带冷却防抖）
+            triggerAutoAction(ruleId, title, message, actionFn) {
+                const now = Date.now();
+                const lastTrigger = this.ruleCooldowns[ruleId] || 0;
+
+                // 冷却时间内不重复触发
+                if (now - lastTrigger < this.cooldownTime) {
+                    return;
+                }
+
+                this.ruleCooldowns[ruleId] = now;
+
+                // 执行动作
+                console.log(`🤖 [自动安防] ${title}: ${message}`);
+                if (actionFn) actionFn();
+
+                // 显示通知
+                this.showAutoActionNotification(title, message);
+
+                // 记录到日志
+                this.logAutoAction(title, message);
+            }
+
+            // 显示自动动作通知
+            showAutoActionNotification(title, message) {
+                // 创建浮动通知
+                const notification = document.createElement('div');
+                notification.className = 'auto-action-notification';
+                notification.innerHTML = `
+                    <div class="notification-title">${title}</div>
+                    <div class="notification-message">${message}</div>
+                    <div class="notification-badge">🤖 自动执行</div>
+                `;
+                notification.style.cssText = `
+                    position: fixed;
+                    top: 100px;
+                    right: 20px;
+                    background: linear-gradient(135deg, rgba(0, 255, 157, 0.15), rgba(0, 100, 80, 0.2));
+                    border: 1px solid var(--neon-green);
+                    border-left: 4px solid var(--neon-green);
+                    border-radius: 8px;
+                    padding: 15px 20px;
+                    min-width: 300px;
+                    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 0 0 20px rgba(0, 255, 157, 0.2);
+                    z-index: 10001;
+                    animation: slideInRight 0.5s ease, fadeOut 0.5s ease 4.5s forwards;
+                    font-family: var(--font-tech);
+                `;
+
+                document.body.appendChild(notification);
+
+                // 5秒后移除
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        notification.parentNode.removeChild(notification);
+                    }
+                }, 5000);
+            }
+
+            // 记录自动动作到命令日志
+            logAutoAction(title, message) {
+                const logEl = document.getElementById('commandLog');
+                if (logEl) {
+                    const time = new Date().toLocaleTimeString();
+                    const entry = document.createElement('div');
+                    entry.style.cssText = 'color: var(--neon-green); margin-bottom: 5px; border-left: 3px solid var(--neon-green); padding-left: 8px;';
+                    entry.innerHTML = `<span style="color: var(--text-dim);">[${time}]</span> 🤖 <strong>${title}</strong>: ${message}`;
+                    logEl.insertBefore(entry, logEl.firstChild);
+                }
+            }
+
+            // 切换自动安防模式
+            toggleAutoSafety(enabled) {
+                this.autoSafetyEnabled = enabled;
+                console.log(`🛡️ 自动安防模式: ${enabled ? '已启用' : '已禁用'}`);
+
+                const statusEl = document.getElementById('autoSafetyStatus');
+                if (statusEl) {
+                    statusEl.style.display = enabled ? 'block' : 'none';
+                    statusEl.textContent = enabled ? '🛡️ 自动安防已激活 - 系统将自动响应异常' : '';
                 }
             }
 
@@ -738,63 +1025,79 @@
 
                 const ctx = canvas.getContext('2d');
 
-                // 初始化图表数据（最多保留360个数据点，约30分钟历史）
-                this.chartData = {
-                    labels: [],
-                    datasets: [
-                        {
-                            label: '温度 (°C)',
-                            data: [],
-                            borderColor: '#ff0055', // Neon Red
-                            backgroundColor: 'rgba(255, 0, 85, 0.1)',
-                            tension: 0.5,
-                            cubicInterpolationMode: 'monotone', // 恢复水流般顺滑
-                            fill: true,
-                            borderWidth: 2,
-                            pointRadius: 0,
-                            pointHoverRadius: 6
-                        },
-                        {
-                            label: '湿度 (%)',
-                            data: [],
-                            borderColor: '#00f3ff', // Neon Cyan
-                            backgroundColor: 'rgba(0, 243, 255, 0.1)',
-                            tension: 0.5,
-                            cubicInterpolationMode: 'monotone', // 恢复水流般顺滑
-                            fill: true,
-                            borderWidth: 2,
-                            pointRadius: 0,
-                            pointHoverRadius: 6,
-                            hidden: true // 默认隐藏，点击图例显示
-                        },
-                        {
-                            label: '烟雾 (V)',
-                            data: [],
-                            borderColor: '#bc13fe', // Neon Magenta
-                            backgroundColor: 'rgba(188, 19, 254, 0.1)',
-                            tension: 0.5,
-                            cubicInterpolationMode: 'monotone', // 恢复水流般顺滑
-                            fill: true,
-                            borderWidth: 2,
-                            pointRadius: 0,
-                            pointHoverRadius: 6,
-                            hidden: true
-                        },
-                        {
-                            label: '光照 (%)',
-                            data: [],
-                            borderColor: '#00ff9d', // Neon Green
-                            backgroundColor: 'rgba(0, 255, 157, 0.1)',
-                            tension: 0.5,
-                            cubicInterpolationMode: 'monotone', // 恢复水流般顺滑
-                            fill: true,
-                            borderWidth: 2,
-                            pointRadius: 0,
-                            pointHoverRadius: 6,
-                            hidden: true
-                        }
-                    ]
-                };
+                // 数据持久化：如果已有数据，则复用，避免切换模式时丢失
+                if (!this.chartData) {
+                    // 初始化图表数据（最多保留500个数据点，约40分钟历史）
+                    this.chartData = {
+                        labels: [],
+                        datasets: [
+                            {
+                                label: '温度 (°C)',
+                                data: [],
+                                borderColor: '#ff0055', // Neon Red
+                                backgroundColor: 'rgba(255, 0, 85, 0.1)',
+                                tension: 0.5,
+                                cubicInterpolationMode: 'monotone',
+                                fill: true,
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                pointHoverRadius: 6
+                            },
+                            {
+                                label: '湿度 (%)',
+                                data: [],
+                                borderColor: '#00f3ff', // Neon Cyan
+                                backgroundColor: 'rgba(0, 243, 255, 0.1)',
+                                tension: 0.5,
+                                cubicInterpolationMode: 'monotone',
+                                fill: true,
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                pointHoverRadius: 6,
+                                hidden: true
+                            },
+                            {
+                                label: '烟雾 (V)',
+                                data: [],
+                                borderColor: '#bc13fe', // Neon Magenta
+                                backgroundColor: 'rgba(188, 19, 254, 0.1)',
+                                tension: 0.5,
+                                cubicInterpolationMode: 'monotone',
+                                fill: true,
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                pointHoverRadius: 6,
+                                hidden: true
+                            },
+                            {
+                                label: '光照 (%)',
+                                data: [],
+                                borderColor: '#00ff9d', // Neon Green
+                                backgroundColor: 'rgba(0, 255, 157, 0.1)',
+                                tension: 0.5,
+                                cubicInterpolationMode: 'monotone',
+                                fill: true,
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                pointHoverRadius: 6,
+                                hidden: true
+                            },
+                            {
+                                label: 'CO₂ (ppm)',
+                                data: [],
+                                borderColor: '#ffaa00', // Orange
+                                backgroundColor: 'rgba(255, 170, 0, 0.1)',
+                                tension: 0.5,
+                                cubicInterpolationMode: 'monotone',
+                                fill: true,
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                pointHoverRadius: 6,
+                                hidden: false
+                            }
+                        ]
+                    };
+                }
 
                 // 创建Chart实例 - 赛博朋克风格
                 this.chart = new Chart(ctx, {
@@ -883,12 +1186,14 @@
                 });
 
                 this.chartData.labels.push(timeLabel);
-                this.chartData.datasets[0].data.push(data.temperature ?? null);
-                this.chartData.datasets[1].data.push(data.humidity ?? null);
-                this.chartData.datasets[2].data.push(data.smoke_voltage ? data.smoke_voltage * 10 : null);
-                this.chartData.datasets[3].data.push(data.light_intensity ?? null);
+                // 修复：允许数值0被绘制，而不是变成null（断线）
+                this.chartData.datasets[0].data.push(data.temperature !== null && data.temperature !== undefined ? data.temperature : null);
+                this.chartData.datasets[1].data.push(data.humidity !== null && data.humidity !== undefined ? data.humidity : null);
+                this.chartData.datasets[2].data.push(data.smoke_voltage !== null && data.smoke_voltage !== undefined ? data.smoke_voltage * 10 : null);
+                this.chartData.datasets[3].data.push(data.light_intensity !== null && data.light_intensity !== undefined ? data.light_intensity : null);
+                this.chartData.datasets[4].data.push(data.co2_ppm !== null && data.co2_ppm !== undefined ? data.co2_ppm / 10 : 0);  // CO2如果为0或无效，显示为0而不留白
 
-                if (this.chartData.labels.length > 360) {
+                if (this.chartData.labels.length > 500) {
                     this.chartData.labels.shift();
                     this.chartData.datasets.forEach(ds => ds.data.shift());
                 }
@@ -903,7 +1208,8 @@
                     if (
                         (activeMode === 'ai' && index === 0) ||
                         (activeMode === 'sensor' && index === 1) ||
-                        (activeMode === 'control' && index === 2)
+                        (activeMode === 'control' && index === 2) ||
+                        (activeMode === 'vision' && index === 3)
                     ) {
                         btn.classList.add('active');
                     }
@@ -971,6 +1277,506 @@
                 // 使用共享断开
                 this.disconnectSharedWebSocket();
             }
+
+            switchToVisionMode() {
+                this.currentMode = 'vision';
+                this.updateModeButtons('vision');
+
+                const main = document.getElementById('mainContent');
+                main.innerHTML = `
+                    <section class="vision-section">
+                        <div class="vision-container" style="max-width: 1400px; margin: 0 auto;">
+                            <h2 style="text-align: center; color: var(--text-primary); margin-bottom: 20px;">🎥 实时视觉检测</h2>
+
+                            <!-- 状态栏 -->
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 15px 25px; background: rgba(0, 243, 255, 0.05); border-radius: 10px; margin-bottom: 25px;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <div id="visionStatusDot" style="width: 12px; height: 12px; border-radius: 50%; background: var(--neon-red);"></div>
+                                    <span id="visionStatusText">未连接</span>
+                                </div>
+                                <div style="display: flex; gap: 20px;">
+                                    <span id="visionFpsCounter">FPS: 0</span>
+                                    <span id="visionLatencyCounter">延迟: 0ms</span>
+                                </div>
+                            </div>
+
+                            <!-- 主内容区域 -->
+                            <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 25px; margin-bottom: 25px;">
+                                <!-- 视频显示区域 -->
+                                <div style="position: relative; background: #000; border-radius: 15px; overflow: hidden; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);">
+                                    <canvas id="visionCanvas" width="640" height="480" style="width: 100%; height: auto; display: block;"></canvas>
+                                    <div style="position: absolute; top: 15px; left: 15px; background: rgba(0, 0, 0, 0.7); color: white; padding: 10px 15px; border-radius: 8px; font-size: 14px;">
+                                        <div id="visionFrameInfo">等待视频流...</div>
+                                    </div>
+                                </div>
+
+                                <!-- 检测面板 -->
+                                <div style="background: rgba(0, 243, 255, 0.05); border-radius: 15px; padding: 25px;">
+                                    <!-- 统计卡片 -->
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+                                        <div id="visionHumanCard" class="device-card" style="text-align: center; padding: 20px;">
+                                            <div id="visionHumanCount" style="font-size: 2.5em; font-weight: bold; color: var(--neon-blue);">0</div>
+                                            <div style="color: var(--text-secondary); font-size: 0.9em; margin-top: 5px;">👤 检测到人</div>
+                                        </div>
+                                        <div id="visionFireCard" class="device-card" style="text-align: center; padding: 20px;">
+                                            <div id="visionFireCount" style="font-size: 2.5em; font-weight: bold; color: var(--neon-red);">0</div>
+                                            <div style="color: var(--text-secondary); font-size: 0.9em; margin-top: 5px;">🔥 检测到火</div>
+                                        </div>
+                                    </div>
+
+                                    <!-- 检测日志 -->
+                                    <div class="device-card" style="padding: 15px;">
+                                        <h3 style="margin-bottom: 10px; font-size: 1.1em;">检测日志</h3>
+                                        <div id="visionLogContainer" class="log-container" style="max-height: 300px; overflow-y: auto;"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 控制按钮 -->
+                            <div style="display: flex; gap: 15px; justify-content: center;">
+                                <button id="visionConnectBtn" class="btn-primary" style="display: none;">连接</button>
+                                <button id="visionDisconnectBtn" class="btn-secondary" style="display: none;">断开</button>
+                            </div>
+
+                            <!-- 调试信息 -->
+                            <div id="visionDebugInfo" class="log-container" style="margin-top: 20px; font-family: monospace; font-size: 0.85em; max-height: 150px;"></div>
+                        </div>
+                    </section>
+                `;
+
+                // 初始化视觉检测
+                this.setupVisionMode();
+            }
+
+            setupVisionMode() {
+                // 初始化Canvas
+                this.visionCanvas = document.getElementById('visionCanvas');
+                this.visionCtx = this.visionCanvas ? this.visionCanvas.getContext('2d') : null;
+                this.visionFrameCount = 0;
+                this.visionLastFrameTime = Date.now();
+
+                // 自动使用共享连接
+                if (this.isConnected) {
+                    this.updateVisionStatus(true);
+                    this.addVisionDebug('✅ 已使用共享WebSocket连接');
+                    this.addVisionLog('系统', '已连接到服务器');
+                } else {
+                    // 自动连接
+                    this.addVisionDebug('🔗 自动连接WebSocket...');
+                    this.connectSharedWebSocket(this.wsServer, this.wsPort);
+                }
+
+                // 添加消息处理（复用sharedWs的onmessage，但这里需要针对vision模式的处理）
+                // 注意：由于共享连接，onmessage已经在connectSharedWebSocket中设置
+                // 我们需要在那里添加对vision模式的支持
+            }
+
+            updateVisionStatus(connected) {
+                const statusDot = document.getElementById('visionStatusDot');
+                const statusText = document.getElementById('visionStatusText');
+
+                if (statusDot && statusText) {
+                    if (connected) {
+                        statusDot.style.background = 'var(--neon-green)';
+                        statusDot.style.boxShadow = '0 0 10px rgba(0, 255, 157, 0.5)';
+                        statusText.textContent = '已连接';
+                    } else {
+                        statusDot.style.background = 'var(--neon-red)';
+                        statusDot.style.boxShadow = 'none';
+                        statusText.textContent = '未连接';
+                    }
+                }
+            }
+
+            addVisionDebug(message) {
+                const debugInfo = document.getElementById('visionDebugInfo');
+                if (!debugInfo) return;
+
+                const now = new Date().toLocaleTimeString();
+                const newLine = `[${now}] ${message}\n`;
+                debugInfo.textContent = newLine + debugInfo.textContent;
+
+                // 限制行数
+                const lines = debugInfo.textContent.split('\n');
+                if (lines.length > 10) {
+                    debugInfo.textContent = lines.slice(0, 10).join('\n');
+                }
+            }
+
+            addVisionLog(type, message, isFire = false) {
+                const logContainer = document.getElementById('visionLogContainer');
+                if (!logContainer) return;
+
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString();
+
+                const logEntry = document.createElement('div');
+                logEntry.style.padding = '8px 12px';
+                logEntry.style.marginBottom = '8px';
+                logEntry.style.borderRadius = '5px';
+                logEntry.style.fontSize = '0.85em';
+                logEntry.style.borderLeft = isFire ? '4px solid var(--neon-red)' : '4px solid var(--neon-blue)';
+                logEntry.style.background = isFire ? 'rgba(255, 0, 85, 0.1)' : 'rgba(0, 243, 255, 0.1)';
+                logEntry.textContent = `[${timeStr}] ${type}: ${message}`;
+
+                logContainer.insertBefore(logEntry, logContainer.firstChild);
+
+                // 限制日志数量
+                while (logContainer.children.length > 100) {
+                    logContainer.removeChild(logContainer.lastChild);
+                }
+            }
+
+            handleVisionImageFrame(blob) {
+                if (!this.visionCanvas || !this.visionCtx) return;
+
+                this.addVisionDebug(`📷 收到图像帧: ${blob.size} 字节`);
+
+                const img = new Image();
+                img.onload = () => {
+                    this.visionCanvas.width = img.width;
+                    this.visionCanvas.height = img.height;
+                    this.visionCtx.drawImage(img, 0, 0);
+                    URL.revokeObjectURL(img.src);
+                };
+                img.src = URL.createObjectURL(blob);
+
+                // 更新FPS
+                this.visionFrameCount++;
+                const now = Date.now();
+                const elapsed = (now - this.visionLastFrameTime) / 1000;
+                if (elapsed >= 1.0) {
+                    const fps = this.visionFrameCount / elapsed;
+                    const fpsCounter = document.getElementById('visionFpsCounter');
+                    if (fpsCounter) {
+                        fpsCounter.textContent = `FPS: ${fps.toFixed(1)}`;
+                    }
+                    this.visionFrameCount = 0;
+                    this.visionLastFrameTime = now;
+                }
+
+                // 更新帧信息
+                const frameInfo = document.getElementById('visionFrameInfo');
+                if (frameInfo) {
+                    frameInfo.textContent = `图像大小: ${(blob.size / 1024).toFixed(1)} KB`;
+                }
+            }
+
+            handleVisionTextMessage(data) {
+                this.addVisionDebug(`处理消息类型: ${data.type}`);
+
+                if (data.type === 'ai_detection') {
+                    const detections = data.data.detections;
+                    let humans = 0;
+                    let fires = 0;
+
+                    detections.forEach(det => {
+                        if (det.class_id === 0) humans++;
+                        else fires++;
+                    });
+
+                    this.addVisionDebug(`🎯 检测: ${humans}人, ${fires}火`);
+
+                    // 更新统计
+                    const humanCount = document.getElementById('visionHumanCount');
+                    const fireCount = document.getElementById('visionFireCount');
+                    const humanCard = document.getElementById('visionHumanCard');
+                    const fireCard = document.getElementById('visionFireCard');
+
+                    if (humanCount) humanCount.textContent = humans;
+                    if (fireCount) fireCount.textContent = fires;
+
+                    // 高亮动画
+                    if (humans > 0 && humanCard) {
+                        humanCard.style.transform = 'scale(1.05)';
+                        humanCard.style.boxShadow = '0 4px 20px rgba(0, 243, 255, 0.4)';
+                        setTimeout(() => {
+                            humanCard.style.transform = '';
+                            humanCard.style.boxShadow = '';
+                        }, 500);
+                    }
+                    if (fires > 0 && fireCard) {
+                        fireCard.style.transform = 'scale(1.05)';
+                        fireCard.style.boxShadow = '0 4px 20px rgba(255, 0, 85, 0.4)';
+                        setTimeout(() => {
+                            fireCard.style.transform = '';
+                            fireCard.style.boxShadow = '';
+                        }, 500);
+                    }
+
+                    // 计算延迟
+                    const latency = Date.now() - data.timestamp;
+                    const latencyCounter = document.getElementById('visionLatencyCounter');
+                    if (latencyCounter) {
+                        latencyCounter.textContent = `延迟: ${latency}ms`;
+                    }
+
+                    // 添加日志
+                    if (humans > 0) {
+                        this.addVisionLog('检测', `发现 ${humans} 个人`, false);
+                    }
+                    if (fires > 0) {
+                        this.addVisionLog('警报', `发现 ${fires} 处火源！`, true);
+                    }
+                } else if (data.type === 'system') {
+                    this.addVisionDebug(`系统消息: ${data.data}`);
+                    this.addVisionLog('系统', data.data);
+                }
+            }
+
+            // ========== 视觉模式 (Vision Mode) ==========
+
+            // 切换到视觉模式
+            switchToVisionMode() {
+                this.currentMode = 'vision';
+                this.updateModeButtons('vision');
+
+                // 保存当前连接配置
+                // const currentServerUrl = document.getElementById('visionServerUrl');
+                // const currentServerPort = document.getElementById('visionServerPort');
+                // if (currentServerUrl) this.wsServer = currentServerUrl.value || this.wsServer;
+                // if (currentServerPort) this.wsPort = currentServerPort.value || this.wsPort;
+
+                const main = document.getElementById('mainContent');
+                main.innerHTML = `
+                <section class="vision-section">
+                    <div class="vision-container">
+                        <!-- 视频流区域 -->
+                        <div class="video-stream-container">
+                            <div class="video-wrapper">
+                                <img id="visionStream" src="images/placeholder_cam.svg" alt="实时视频流" class="video-feed">
+                                <div class="video-overlay" id="visionOverlay">
+                                    <div class="status-badge disconnected" id="visionStatusBadge">未连接信号</div>
+                                    <div class="fps-counter" id="fpsCounter">FPS: 0</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 右侧控制与信息 -->
+                        <div class="vision-sidebar">
+                            <div class="vision-panel connection-panel">
+                                <h3>🔌 连接配置</h3>
+                                <div class="config-group">
+                                    <label>服务器:</label>
+                                    <input type="text" id="visionServerUrl" value="${this.wsServer}" class="tech-input">
+                                </div>
+                                <div class="config-group">
+                                    <label>端口:</label>
+                                    <input type="number" id="visionServerPort" value="${this.wsPort}" class="tech-input">
+                                </div>
+                                <div class="btn-group">
+                                    <button id="visionConnectBtn" class="btn-primary" onclick="modeManager.connectVision()">连接视频流</button>
+                                    <button id="visionDisconnectBtn" class="btn-secondary" onclick="modeManager.disconnectVision()" disabled>断开</button>
+                                </div>
+                            </div>
+
+                            <!-- 🔐 隐私模式控制面板 -->
+                            <div class="vision-panel privacy-panel" style="margin-top: 15px;">
+                                <h3>🔐 隐私模式</h3>
+                                <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 0;">
+                                    <span style="font-size: 13px; color: var(--text-secondary);">开启后视频模糊，仅显示AI数据</span>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="privacyModeToggle" onchange="modeManager.togglePrivacyMode(this.checked)">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <div id="privacyModeStatus" style="font-size: 12px; color: var(--neon-green); text-align: center; padding: 8px; background: rgba(0, 255, 157, 0.1); border-radius: 6px; display: none;">
+                                    ✅ 边缘AI模式激活 - 原始图像已保护
+                                </div>
+                            </div>
+
+                            <div class="vision-panel detection-panel">
+                                <h3>🎯 实时检测</h3>
+                                <div class="stat-grid">
+                                    <div class="stat-item">
+                                        <span class="stat-label">👥 人员</span>
+                                        <span class="stat-value" id="detectHumanCount">0</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">🔥 火焰</span>
+                                        <span class="stat-value" id="detectFireCount">0</span>
+                                    </div>
+                                </div>
+                                <div class="detection-log" id="detectionLog">
+                                    <div class="log-entry dim">等待检测数据...</div>
+                                </div>
+                            </div>
+                            
+                            <div class="vision-panel gesture-panel">
+                                <h3>✋ 手势识别</h3>
+                                <div class="gesture-status" id="visionGestureStatus">
+                                    <div style="font-size: 24px; margin-bottom: 8px;">Waiting...</div>
+                                    <div style="font-size: 12px; color: var(--text-dim);">请在摄像头前做手势</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            `;
+
+                // 更新连接状态UI
+                this.updateVisionStatus(this.isConnected);
+            }
+
+            // 更新视觉模式连接状态UI
+            updateVisionStatus(connected) {
+                const connectBtn = document.getElementById('visionConnectBtn');
+                const disconnectBtn = document.getElementById('visionDisconnectBtn');
+                const statusBadge = document.getElementById('visionStatusBadge');
+
+                if (connectBtn && disconnectBtn) {
+                    connectBtn.disabled = connected;
+                    disconnectBtn.disabled = !connected;
+                }
+
+                if (statusBadge) {
+                    if (connected) {
+                        statusBadge.textContent = '⚫ LIVE';
+                        statusBadge.className = 'status-badge connected';
+                    } else {
+                        statusBadge.textContent = '未连接信号';
+                        statusBadge.className = 'status-badge disconnected';
+                    }
+                }
+            }
+
+            // 连接视觉流
+            connectVision() {
+                const url = document.getElementById('visionServerUrl').value || 'localhost';
+                const port = document.getElementById('visionServerPort').value || '8080';
+
+                // 使用共享连接
+                this.connectSharedWebSocket(url, port);
+            }
+
+            // 断开视觉流
+            disconnectVision() {
+                this.disconnectSharedWebSocket();
+            }
+
+            // 🔐 隐私模式切换
+            togglePrivacyMode(enabled) {
+                this.privacyModeEnabled = enabled;
+                const img = document.getElementById('visionStream');
+                const statusEl = document.getElementById('privacyModeStatus');
+
+                if (img) {
+                    if (enabled) {
+                        // 应用强力模糊 + 马赛克效果
+                        img.style.filter = 'blur(25px) saturate(0.3) brightness(0.6)';
+                        img.style.transition = 'filter 0.5s ease';
+                        console.log('🔐 隐私模式已开启 - 视频已模糊，AI数据继续显示');
+                    } else {
+                        // 移除模糊
+                        img.style.filter = 'none';
+                        img.style.transition = 'filter 0.5s ease';
+                        console.log('👁️ 隐私模式已关闭 - 恢复原始视频');
+                    }
+                }
+
+                if (statusEl) {
+                    statusEl.style.display = enabled ? 'block' : 'none';
+                }
+            }
+
+            // 处理视觉图像帧 (Binary Blob)
+            handleVisionImageFrame(blob) {
+                const img = document.getElementById('visionStream');
+                if (img) {
+                    // 释放旧的URL对象以释放内存
+                    if (this.lastObjectUrl) {
+                        URL.revokeObjectURL(this.lastObjectUrl);
+                    }
+
+                    // 创建新的URL对象
+                    this.lastObjectUrl = URL.createObjectURL(blob);
+                    img.src = this.lastObjectUrl;
+
+                    // 如果隐私模式开启，确保模糊效果持续
+                    if (this.privacyModeEnabled) {
+                        img.style.filter = 'blur(25px) saturate(0.3) brightness(0.6)';
+                    }
+
+                    // 更新FPS
+                    this.updateFPS();
+                }
+            }
+
+            // 计算并更新FPS
+            updateFPS() {
+                const now = Date.now();
+                if (!this.lastFrameTime) {
+                    this.lastFrameTime = now;
+                    this.fps = 0;
+                    return;
+                }
+
+                const delta = now - this.lastFrameTime;
+                this.lastFrameTime = now;
+
+                // 简单的FPS计算 (平滑处理)
+                const currentFps = 1000 / delta;
+                this.fps = this.fps * 0.9 + currentFps * 0.1;
+
+                const fpsEl = document.getElementById('fpsCounter');
+                if (fpsEl) {
+                    fpsEl.textContent = `FPS: ${this.fps.toFixed(1)}`;
+                }
+            }
+
+            // 处理视觉文本消息 (AI检测结果)
+            handleVisionTextMessage(message) {
+                if (message.type === 'ai_detection') {
+                    const data = message.data;
+                    const detections = data.detections || [];
+
+                    // 更新计数
+                    let humanCount = 0;
+                    let fireCount = 0;
+
+                    detections.forEach(det => {
+                        if (det.class_id === 0) humanCount++; // 假设0是人
+                        else fireCount++; // 其他是火
+                    });
+
+                    const humanEl = document.getElementById('detectHumanCount');
+                    const fireEl = document.getElementById('detectFireCount');
+
+                    if (humanEl) humanEl.textContent = humanCount;
+                    if (fireEl) {
+                        fireEl.textContent = fireCount;
+                        if (fireCount > 0) {
+                            fireEl.style.color = '#ff3b30';
+                            fireEl.style.textShadow = '0 0 10px rgba(255, 59, 48, 0.6)';
+                        } else {
+                            fireEl.style.color = 'var(--text-primary)';
+                            fireEl.style.textShadow = 'none';
+                        }
+                    }
+
+                    // 更新日志
+                    if (detections.length > 0) {
+                        const logEl = document.getElementById('detectionLog');
+                        if (logEl) {
+                            const time = new Date().toLocaleTimeString();
+                            const logContent = detections.map(d => `${d.class_name} (${(d.score * 100).toFixed(0)}%)`).join(', ');
+
+                            const entry = document.createElement('div');
+                            entry.className = 'log-entry';
+                            entry.innerHTML = `<span class="log-time">[${time}]</span> ${logContent}`;
+
+                            logEl.prepend(entry);
+
+                            // 限制日志数量
+                            if (logEl.children.length > 100) {
+                                logEl.removeChild(logEl.lastChild);
+                            }
+                        }
+                    }
+                } else if (message.type === 'system') {
+                    // 系统消息处理...
+                }
+            }
         }
 
         // 全局函数
@@ -984,6 +1790,10 @@
 
         function switchToControlMode() {
             modeManager.switchToControlMode();
+        }
+
+        function switchToVisionMode() {
+            modeManager.switchToVisionMode();
         }
 
         // 控制模式全局函数
@@ -1145,6 +1955,9 @@
             }
         }
 
+
+
+
         function updateIndicatorLightUI(color) {
             currentIndicatorColor = color;
             if (!indicatorLightEnabled) return;
@@ -1225,6 +2038,22 @@
         const modeManager = new ModeManager();
         document.addEventListener('DOMContentLoaded', () => {
             modeManager.init();
+
+            // 初始化手势/语音交互管理器
+            if (window.gestureVoiceManager) {
+                window.gestureVoiceManager.init({
+                    onDeviceControl: (actionData) => {
+                        console.log('🎮 手势/语音控制回调:', actionData);
+                        // 可以在这里触发实际的设备控制
+                        if (modeManager.sharedWs && modeManager.isConnected) {
+                            // 发送到ESP32
+                            modeManager.sendMessage(actionData);
+                        }
+                    }
+                });
+                // 保存WebSocket连接供GestureVoiceManager使用
+                window.wsConnection = modeManager.sharedWs;
+            }
         });
     </script>
 </body>

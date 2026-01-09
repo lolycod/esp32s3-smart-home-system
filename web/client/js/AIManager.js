@@ -235,7 +235,7 @@ class AIManager {
             }
 
             const parsed = JSON.parse(jsonStr);
-            const isDeviceControl = parsed.风扇 || parsed.LED灯 || parsed.窗帘 || parsed.空调;
+            const isDeviceControl = parsed.风扇 || parsed.LED灯 || parsed.窗帘;
 
             if (isDeviceControl) {
                 console.log('✅ 识别到设备控制JSON:', parsed);
@@ -278,9 +278,6 @@ class AIManager {
         }
         if (deviceControl.窗帘) {
             cardsHTML += this.createCurtainCard(deviceControl.窗帘);
-        }
-        if (deviceControl.空调) {
-            cardsHTML += this.createAirConditionerCard(deviceControl.空调);
         }
         if (deviceControl.综合说明) {
             cardsHTML += `<div class="summary-card">${this.escapeHtml(deviceControl.综合说明)}</div>`;
@@ -375,56 +372,6 @@ class AIManager {
                     <div class="detail-item">
                         <span class="detail-label">状态:</span>
                         <span class="detail-value">${isOpen ? '打开' : '关闭'}</span>
-                    </div>
-                    ${reason ? `<div class="detail-reason">${this.escapeHtml(reason)}</div>` : ''}
-                </div>
-            </div>
-        `;
-    }
-
-    /**
-     * 创建空调卡片
-     */
-    createAirConditionerCard(acData) {
-        const isOn = acData.开关 === "开";
-        const temperature = acData.温度 || "25";
-        const mode = acData.模式 || "制冷";
-        const windSpeed = acData.风速 || "自动";
-        const verticalWind = acData.上下排风 || "自动";
-        const horizontalWind = acData.左右排风 || "自动";
-        const reason = acData.理由 || "";
-
-        return `
-            <div class="device-card ac-card ${isOn ? 'device-on' : 'device-off'}">
-                <div class="device-header">
-                    <span class="device-icon">❄️</span>
-                    <span class="device-name">空调</span>
-                    <span class="device-status">${isOn ? '开启' : '关闭'}</span>
-                </div>
-                <div class="device-details">
-                    <div class="detail-item">
-                        <span class="detail-label">状态:</span>
-                        <span class="detail-value">${isOn ? '开启' : '关闭'}</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">温度:</span>
-                        <span class="detail-value">${temperature}°C</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">模式:</span>
-                        <span class="detail-value">${mode}</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">风速:</span>
-                        <span class="detail-value">${windSpeed}</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">上下排风:</span>
-                        <span class="detail-value">${verticalWind}</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">左右排风:</span>
-                        <span class="detail-value">${horizontalWind}</span>
                     </div>
                     ${reason ? `<div class="detail-reason">${this.escapeHtml(reason)}</div>` : ''}
                 </div>

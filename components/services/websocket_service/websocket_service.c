@@ -238,17 +238,21 @@ esp_err_t websocket_service_send_sensor_data(const sensor_data_t *data)
     // 构建符合服务器要求的JSON数据（包含type, timestamp, data字段）
     char json[512];
     int len = snprintf(json, sizeof(json),
-             "{\"type\":\"message\",\"timestamp\":%lu,\"data\":{\"temperature\":%.1f,\"humidity\":%d,\"smoke_voltage\":%.2f,\"smoke_detected\":%s,\"light_intensity\":%.1f,\"light_sufficient\":%s}}",
+             "{\"type\":\"message\",\"timestamp\":%lu,\"data\":{\"temperature\":%.1f,\"humidity\":%d,\"smoke_voltage\":%.2f,\"smoke_detected\":%s,\"light_intensity\":%.1f,\"light_sufficient\":%s,\"co2_ppm\":%d,\"tvoc_ppb\":%d,\"ch2o_ppb\":%d}}",
              data->timestamp_ms,
              data->temperature,
              data->humidity,
              data->smoke_voltage,
              data->smoke_detected ? "true" : "false",
              data->light_intensity,
-             data->light_sufficient ? "true" : "false");
+             data->light_sufficient ? "true" : "false",
+             data->co2_ppm,
+             data->tvoc_ppb,
+             data->ch2o_ppb);
 
     // 发送数据
-    int ret = esp_websocket_client_send_text(s_client, json, len, portMAX_DELAY);
+    // 发送数据 (不要无限等待，超时500ms即放弃，防止阻塞传感器任务)
+    int ret = esp_websocket_client_send_text(s_client, json, len, pdMS_TO_TICKS(500));
     if (ret < 0) {
         ESP_LOGE(TAG, "发送数据失败: %d", ret);
         return ESP_FAIL;

@@ -19,7 +19,7 @@ call "%IDF_PATH%\export.bat" >nul 2>&1
 echo      完成！
 echo.
 
-echo [2/7] 关闭占用COM8的进程...
+echo [2/7] 关闭占用COM5的进程...
 taskkill /F /IM python.exe >nul 2>&1
 timeout /t 1 >nul
 echo      完成！
@@ -46,7 +46,7 @@ echo      完成！
 echo.
 
 echo [5/7] 擦除Flash（删除所有旧数据）...
-idf.py -p COM8 erase-flash
+idf.py -p COM5 erase-flash
 if errorlevel 1 (
     echo      [错误] 擦除失败！
     pause
@@ -56,7 +56,7 @@ echo      完成！
 echo.
 
 echo [6/7] 烧录新固件...
-idf.py -p COM8 flash
+idf.py -p COM5 flash
 if errorlevel 1 (
     echo      [错误] 烧录失败！
     pause
@@ -80,4 +80,4 @@ pause >nul
 echo.
 echo 正在打开串口监视器（按 Ctrl+] 退出）...
 echo.
-idf.py -p COM8 monitor
+idf.py -p COM5 monitor

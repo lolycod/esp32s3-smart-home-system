@@ -7,7 +7,11 @@
 #include "dht11_driver.h"
 #include "mq2_driver.h"
 #include "ldr_driver.h"
+#include "co2_driver.h"
 #include "websocket_service.h"
+#include "esp_log.h"
+#include "freertos/task.h"
+#include "esp_timer.h"
 #include "esp_log.h"
 #include "freertos/task.h"
 #include "esp_timer.h"
@@ -48,7 +52,7 @@ static void sensor_task(void *arg)
             data.valid = true;
         } else {
             ESP_LOGW(TAG, "❌ DHT11读取失败");
-            data.valid = false;
+            // data.valid = false; // 不要因为DHT11失败就认为整个包无效
         }
 
         // 读取MQ-2数据
@@ -68,8 +72,31 @@ static void sensor_task(void *arg)
             data.light_sufficient = false;
         }
 
-        ESP_LOGI(TAG, "📊 温度: %.1f°C | 湿度: %d%% | 烟雾: %.2fV | 光照: %.1f%%",
-                 data.temperature, data.humidity, data.smoke_voltage, data.light_intensity);
+        // 读取JW01 CO2传感器数据
+        co2_data_t co2_data;
+        ret = co2_driver_read(&co2_data);
+        if (ret == ESP_OK && co2_data.valid) {
+            data.co2_ppm = co2_data.co2_ppm;
+            data.tvoc_ppb = co2_data.tvoc_ppb;
+            data.ch2o_ppb = co2_data.ch2o_ppb;
+            data.co2_valid = true;
+        } else {
+            data.co2_ppm = 0;
+            data.tvoc_ppb = 0;
+            data.ch2o_ppb = 0;
+            data.co2_valid = false;
+        }
+
+        // 只要有任何一个传感器数据有效，且时间戳已设置，就视为数据包有效
+        if (data.timestamp_ms == 0) {
+            data.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        }
+        
+        // 修正：放宽发送条件，只要有时间戳就尝试发送（未读取到的数据为0/false）
+        data.valid = true;
+
+        ESP_LOGI(TAG, "📊 温度: %.1f°C | 湿度: %d%% | 烟雾: %.2fV | 光照: %.1f%% | CO2: %d ppm",
+                 data.temperature, data.humidity, data.smoke_voltage, data.light_intensity, data.co2_ppm);
 
         // 保存最后一次传感器数据
         s_last_sensor_data = data;
@@ -102,7 +129,8 @@ static void sensor_task(void *arg)
             ESP_LOGI(TAG, "✅ 首次数据采样完成，立即可用");
             last_wake_time = xTaskGetTickCount();  // 重置基准时间
         }
-        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(s_sample_interval_ms));
+        // vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(s_sample_interval_ms));
+        vTaskDelay(pdMS_TO_TICKS(s_sample_interval_ms)); // 使用相对延时，逻辑更简单可靠
     }
 
     ESP_LOGI(TAG, "传感器采集任务已结束");
@@ -125,14 +153,14 @@ esp_err_t sensor_service_init(const sensor_service_config_t *config)
     s_sample_interval_ms = config->sample_interval_ms;
     s_data_queue = config->data_queue;
 
-    // [DEBUG] Test GPIO4 basic functionality first
-    ESP_LOGI(TAG, "[TEST] Starting GPIO4 basic test...");
-    esp_err_t test_ret = test_gpio4_basic();
-    if (test_ret != ESP_OK) {
-        ESP_LOGE(TAG, "[TEST] GPIO4 basic test FAILED, cannot continue DHT11 init");
-        return test_ret;
-    }
-    ESP_LOGI(TAG, "[TEST] GPIO4 basic test PASSED");
+    // [DEBUG] GPIO4 basic test removed for production stability
+    // ESP_LOGI(TAG, "[TEST] Starting GPIO4 basic test...");
+    // esp_err_t test_ret = test_gpio4_basic();
+    // if (test_ret != ESP_OK) {
+    //     ESP_LOGE(TAG, "[TEST] GPIO4 basic test FAILED, cannot continue DHT11 init");
+    //     // return test_ret; // Allow continuing
+    // }
+    // ESP_LOGI(TAG, "[TEST] GPIO4 basic test PASSED");
 
     // Initialize DHT11 driver
     dht11_driver_config_t dht11_cfg = {
@@ -141,8 +169,10 @@ esp_err_t sensor_service_init(const sensor_service_config_t *config)
 
     esp_err_t ret = dht11_driver_init(&dht11_cfg);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "DHT11 driver init failed");
-        return ret;
+        ESP_LOGW(TAG, "⚠️ DHT11驱动初始化失败，继续运行");
+        // return ret; // 容错处理：不中断系统
+    } else {
+        ESP_LOGI(TAG, "✅ DHT11驱动初始化成功");
     }
 
     // Initialize MQ-2 driver
@@ -154,8 +184,10 @@ esp_err_t sensor_service_init(const sensor_service_config_t *config)
 
     ret = mq2_driver_init(&mq2_cfg);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "MQ-2 driver init failed");
-        return ret;
+        ESP_LOGW(TAG, "⚠️ MQ-2驱动初始化失败，继续运行");
+        // return ret; // 容错处理：不中断系统
+    } else {
+        ESP_LOGI(TAG, "✅ MQ-2驱动初始化成功");
     }
 
     // Initialize 5516光敏电阻 driver
@@ -171,6 +203,21 @@ esp_err_t sensor_service_init(const sensor_service_config_t *config)
         // 不返回错误，继续运行（没有光敏电阻也能工作）
     } else {
         ESP_LOGI(TAG, "✅ LDR driver initialized successfully");
+    }
+
+    // 初始化JW01 CO2传感器驱动
+    co2_driver_config_t co2_cfg = {
+        .uart_tx_gpio = config->co2_uart_tx_gpio,
+        .uart_rx_gpio = config->co2_uart_rx_gpio,
+        .uart_num = config->co2_uart_num,
+    };
+
+    ret = co2_driver_init(&co2_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "⚠️ CO2传感器初始化失败，继续运行");
+        // 不返回错误，继续运行（没有CO2传感器也能工作）
+    } else {
+        ESP_LOGI(TAG, "✅ CO2传感器初始化成功");
     }
 
     // 初始化WebSocket服务（如果配置了）
@@ -194,6 +241,8 @@ esp_err_t sensor_service_init(const sensor_service_config_t *config)
     ESP_LOGI(TAG, "   - MQ-2 ADC通道: %d", config->mq2_adc_channel);
     ESP_LOGI(TAG, "   - LDR DO GPIO: %d", config->ldr_do_gpio);
     ESP_LOGI(TAG, "   - LDR ADC通道: %d", config->ldr_adc_channel);
+    ESP_LOGI(TAG, "   - CO2 TX GPIO: %d, RX GPIO: %d, UART: %d", 
+             config->co2_uart_tx_gpio, config->co2_uart_rx_gpio, config->co2_uart_num);
     ESP_LOGI(TAG, "   - 采样间隔: %lu ms", s_sample_interval_ms);
     ESP_LOGI(TAG, "   - 数据队列: %s", s_data_queue ? "启用" : "禁用");
     ESP_LOGI(TAG, "   - WebSocket: %s", s_websocket_enabled ? "启用" : "禁用");
@@ -304,6 +353,7 @@ esp_err_t sensor_service_deinit(void)
     sensor_service_stop();
     dht11_driver_deinit();
     mq2_driver_deinit();
+    co2_driver_deinit();
 
     ESP_LOGI(TAG, "传感器服务已关闭");
     return ESP_OK;

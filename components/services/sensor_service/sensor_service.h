@@ -32,6 +32,10 @@ typedef struct {
     float smoke_voltage;        ///< 烟雾传感器电压
     float light_intensity;      ///< 光照强度百分比 (0-100%)
     bool light_sufficient;      ///< 光照是否充足（来自DO）
+    uint16_t co2_ppm;           ///< CO2 浓度 (ppm)
+    uint16_t tvoc_ppb;          ///< TVOC 浓度 (ppb)
+    uint16_t ch2o_ppb;          ///< 甲醛浓度 (ppb)
+    bool co2_valid;             ///< CO2 数据是否有效
     uint32_t timestamp_ms;      ///< 时间戳 (毫秒)
     bool valid;                 ///< 数据是否有效
 } sensor_data_t;
@@ -45,6 +49,9 @@ typedef struct {
     int mq2_adc_channel;             ///< MQ-2 ADC通道
     int ldr_do_gpio;                 ///< 5516光敏电阻DO引脚
     int ldr_adc_channel;             ///< 5516光敏电阻ADC通道
+    int co2_uart_tx_gpio;            ///< CO2 传感器 UART TX 引脚
+    int co2_uart_rx_gpio;            ///< CO2 传感器 UART RX 引脚
+    int co2_uart_num;                ///< CO2 传感器 UART 端口号
     uint32_t sample_interval_ms;     ///< 采样间隔(ms)
     QueueHandle_t data_queue;        ///< 数据输出队列
     const char *websocket_uri;       ///< WebSocket服务器URI (NULL则禁用)

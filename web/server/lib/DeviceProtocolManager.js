@@ -12,16 +12,14 @@ class DeviceProtocolManager {
         this.deviceTypes = {
             LED: 'LED',
             FAN: 'FAN',
-            CURTAIN: 'CURTAIN',
-            AC: 'AC'
+            CURTAIN: 'CURTAIN'
         };
 
         // 设备处理器映射 - 模块化设备控制
         this.deviceHandlers = {
             '风扇': this.handleFanDevice.bind(this),
             'LED灯': this.handleLEDDevice.bind(this),
-            '窗帘': this.handleCurtainDevice.bind(this),
-            '空调': this.handleAirConditionerDevice.bind(this)
+            '窗帘': this.handleCurtainDevice.bind(this)
         };
 
         // 默认参数
@@ -32,13 +30,6 @@ class DeviceProtocolManager {
             },
             FAN: {
                 speed: 1         // 1档风速
-            },
-            AC: {
-                temperature: 25,    // 25°C
-                mode: '制冷',       // 制冷模式
-                windSpeed: '自动',  // 自动风速
-                verticalWind: '自动', // 上下排风自动
-                horizontalWind: '自动' // 左右排风自动
             }
         };
     }
@@ -283,52 +274,6 @@ class DeviceProtocolManager {
     }
 
     /**
-     * 空调设备处理器
-     * @param {Object} config - 空调配置
-     * @param {string} source - 命令来源
-     * @returns {string} 空调控制命令
-     */
-    handleAirConditionerDevice(config, source = 'AI') {
-        const onOff = config.开关 === "开" ? "1" : "0";
-        const temperature = String(config.温度 || 25).padStart(2, '0');
-        const mode = config.模式 === "制热" ? "H" : "C"; // H=制热, C=制冷
-        const windSpeed = this.mapWindSpeed(config.风速 || "自动");
-        const verticalWind = this.mapWindDirection(config.上下排风 || "自动");
-        const horizontalWind = this.mapWindDirection(config.左右排风 || "自动");
-
-        return `AC${onOff}${temperature}${mode}${windSpeed}${verticalWind}${horizontalWind}`;
-    }
-
-    /**
-     * 映射风速等级
-     * @param {string} speed - 风速描述
-     * @returns {string} 风速代码
-     */
-    mapWindSpeed(speed) {
-        const speedMap = {
-            '自动': '0',
-            '低速': '1',
-            '中速': '2',
-            '高速': '3'
-        };
-        return speedMap[speed] || '0';
-    }
-
-    /**
-     * 映射风向
-     * @param {string} direction - 风向描述
-     * @returns {string} 风向代码
-     */
-    mapWindDirection(direction) {
-        const directionMap = {
-            '自动': '0',
-            '固定': '1',
-            '摆动': '2'
-        };
-        return directionMap[direction] || '0';
-    }
-
-    /**
      * 注册新设备处理器 - 方便扩展
      * @param {string} deviceName - 设备名称
      * @param {Function} handler - 设备处理函数
@@ -347,18 +292,10 @@ class DeviceProtocolManager {
     }
 
     /**
-     * 示例：扩展新设备 - 空调
+     * 示例：扩展新设备 - 智能插座
      * 展示如何轻松添加新设备支持
      */
     initializeExampleDevices() {
-        // 示例：添加空调设备处理器
-        this.registerDeviceHandler('空调', (config, source = 'AI') => {
-            const onOff = config.开关 === "开" ? "1" : "0";
-            const temp = config.温度 || 26;
-            const mode = config.模式 === "制冷" ? "C" : "H"; // C=制冷, H=制热
-            return `AC${onOff}${temp}${mode}`;
-        });
-
         // 示例：添加智能插座设备处理器
         this.registerDeviceHandler('智能插座', (config, source = 'AI') => {
             const onOff = config.开关 === "开" ? "1" : "0";
