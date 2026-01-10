@@ -23,5 +23,8 @@
   "license": "MIT",
   "engines": {
     "node": ">=14.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
   }
 }

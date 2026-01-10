@@ -131,8 +131,8 @@ static esp_err_t init_services(void)
     // 初始化WiFi服务（异步非阻塞模式）
     ESP_LOGI(TAG, "[INFO] 初始化WiFi服务（异步模式，不阻塞电机启动）");
     wifi_service_config_t wifi_cfg = {
-        .ssid = "123",
-        .password = "123456abc",
+        .ssid = "8505",
+        .password = "8505YYDS",
         .max_retry = 10,
     };
     ret = wifi_service_init(&wifi_cfg);
@@ -157,7 +157,7 @@ static esp_err_t init_services(void)
         .co2_uart_num = 1,        // 使用UART1
         .sample_interval_ms = 2000, // 提高采样频率至 2秒一次
         .data_queue = s_sensor_data_queue,
-        .websocket_uri = "ws://192.168.102.121:8080",  // 自动更新为当前WiFi IP
+        .websocket_uri = "ws://192.168.31.150:8080",  // 自动更新为当前WiFi IP
     };
     ret = sensor_service_init(&sensor_cfg);
     if (ret != ESP_OK) {
@@ -296,7 +296,7 @@ static void test_adc_gpio6_direct(void)
     ESP_LOGI(TAG, "║     GPIO6 ADC功能直接测试              ║");
     ESP_LOGI(TAG, "╚════════════════════════════════════════╝");
     ESP_LOGI(TAG, "");
-    
+
     // 步骤1: 重置GPIO6
     ESP_LOGI(TAG, "[1/5] 重置GPIO6...");
     gpio_reset_pin(6);
@@ -343,32 +343,32 @@ static void test_adc_gpio6_direct(void)
     } else {
         ESP_LOGI(TAG, "[WARN] 校准: 默认Vref");
     }
-    
+
     // 步骤5: 读取ADC 20次
     ESP_LOGI(TAG, "[5/5] 读取ADC (20次)...");
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "开始读取 GPIO6 (ADC1_CH5):");
     ESP_LOGI(TAG, "----------------------------------------");
-    
+
     int zero_count = 0;
     int nonzero_count = 0;
     uint32_t sum = 0;
     int max_val = 0;
     int min_val = 4095;
-    
+
     for (int i = 0; i < 20; i++) {
         // 直接读取ADC1_CH5
         int raw = adc1_get_raw(ADC1_CHANNEL_5);
-        
+
         if (raw < 0) {
             ESP_LOGE(TAG, "[%2d] [ERROR] 读取失败: 错误码=%d", i+1, raw);
             continue;
         }
-        
+
         // 转换为电压
         uint32_t voltage_mv = esp_adc_cal_raw_to_voltage(raw, adc_chars);
         float voltage_v = (float)voltage_mv / 1000.0f;
-        
+
         // 统计
         if (raw == 0) {
             zero_count++;
@@ -378,14 +378,14 @@ static void test_adc_gpio6_direct(void)
         sum += raw;
         if (raw > max_val) max_val = raw;
         if (raw < min_val) min_val = raw;
-        
+
         // 打印结果
-        ESP_LOGI(TAG, "[%2d] RAW=%4d, 电压=%5lumV (%.3fV)", 
+        ESP_LOGI(TAG, "[%2d] RAW=%4d, 电压=%5lumV (%.3fV)",
                  i+1, raw, voltage_mv, voltage_v);
-        
+
         vTaskDelay(pdMS_TO_TICKS(100));  // 100ms间隔
     }
-    
+
     // 统计结果
     ESP_LOGI(TAG, "----------------------------------------");
     ESP_LOGI(TAG, "");
@@ -425,13 +425,13 @@ static void test_adc_gpio6_direct(void)
     } else {
         ESP_LOGI(TAG, "[OK] ADC功能基本正常");
     }
-    
+
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "╔════════════════════════════════════════╗");
     ESP_LOGI(TAG, "║     测试完成                           ║");
     ESP_LOGI(TAG, "╚════════════════════════════════════════╝");
     ESP_LOGI(TAG, "");
-    
+
     free(adc_chars);
 }
 

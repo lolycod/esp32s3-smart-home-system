@@ -6,11 +6,11 @@
 const https = require('https');
 
 class AIService {
-    constructor(apiKey = process.env.ZHIPU_API_KEY || '588f9863b5f44a82abccf20015304675.4NHW6sZBkjNq7SxG') {
+    constructor(apiKey = process.env.ZHIPU_API_KEY || '493d8b1ceaa044168412775f8a4dd707.bebu6cSgM4R7o7wj') {
         this.apiKey = apiKey;
         this.baseURL = 'open.bigmodel.cn';
         this.apiPath = '/api/paas/v4/chat/completions';
-        this.model = 'glm-4-plus'; // 默认使用glm-4-plus模型
+        this.model = 'glm-4-flash'; // 使用免费的glm-4-flash模型
 
         // 对话历史管理（按会话ID存储）
         this.conversationHistory = new Map();
@@ -81,6 +81,9 @@ class AIService {
      * @param {Function} onError - 错误处理回调
      */
     sendChatStream(userMessage, sessionId = 'default', onChunk, onComplete, onError) {
+        console.log(`🔍 开始AI对话流式请求 - Session: ${sessionId}`);
+        console.log(`🔍 API Key: ${this.apiKey ? this.apiKey.substring(0, 10) + '...' : 'undefined'}`);
+        
         // 获取或初始化会话历史
         if (!this.conversationHistory.has(sessionId)) {
             this.conversationHistory.set(sessionId, []);
@@ -190,11 +193,14 @@ ${JSON.stringify(currentDeviceState, null, 2)}
         let fullResponse = '';
 
         const req = https.request(options, (res) => {
+            console.log(`🔍 AI API响应状态码: ${res.statusCode}`);
+            
             // 检查HTTP状态码
             if (res.statusCode !== 200) {
                 let errorData = '';
                 res.on('data', chunk => errorData += chunk);
                 res.on('end', () => {
+                    console.error(`❌ AI API请求失败: HTTP ${res.statusCode} - ${errorData}`);
                     onError(new Error(`API请求失败: HTTP ${res.statusCode} - ${errorData}`));
                 });
                 return;
@@ -269,9 +275,11 @@ ${JSON.stringify(currentDeviceState, null, 2)}
         });
 
         req.on('error', (error) => {
+            console.error(`❌ AI API请求网络错误:`, error);
             onError(error);
         });
 
+        console.log(`🔍 发送AI API请求到: https://${this.baseURL}${this.apiPath}`);
         req.write(requestBody);
         req.end();
     }

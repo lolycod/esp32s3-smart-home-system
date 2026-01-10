@@ -69,8 +69,8 @@ def connect_websocket():
         )
         sock.sendall(handshake.encode())
 
-        # 等待握手响应
-        response = sock.recv(1024).decode()
+        response = sock.recv(1024).decode('utf-8', errors='ignore')  # 忽略解码错误
+
         if "101 Switching Protocols" in response:
             print(f"✅ WebSocket连接成功")
             return sock

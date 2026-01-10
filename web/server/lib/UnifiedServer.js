@@ -152,11 +152,11 @@ class UnifiedServer {
             const parsedUrl = url.parse(req.url, true);
             let pathname = parsedUrl.pathname;
 
-            // MJPEG视频流代理（MaixCAM）
-            if (pathname === '/maixcam_stream') {
-                this.handleMJPEGProxy(req, res);
-                return;
-            }
+            // MJPEG视频流代理（MaixCAM）- 已注释，因为MaixCAM不提供HTTP服务器
+            // if (pathname === '/maixcam_stream') {
+            //     this.handleMJPEGProxy(req, res);
+            //     return;
+            // }
 
             // API路由处理
             if (pathname.startsWith('/api/')) {
@@ -192,10 +192,11 @@ class UnifiedServer {
     }
 
     /**
-     * 处理MJPEG视频流代理（从MaixCAM转发）
+     * 处理MJPEG视频流代理（从MaixCAM转发）- 已注释，因为MaixCAM不提供HTTP服务器
      * @param {http.IncomingMessage} req - 请求对象
      * @param {http.ServerResponse} res - 响应对象
      */
+    /*
     handleMJPEGProxy(req, res) {
         // MaixCAM的IP地址和端口
         const MAIXCAM_IP = '192.168.31.43';
@@ -290,6 +291,7 @@ class UnifiedServer {
         // 发送代理请求
         proxyReq.end();
     }
+    */
 
     /**
      * 处理API请求
@@ -413,29 +415,55 @@ class UnifiedServer {
 
                     // 发送数据块
                     const sendChunk = (content) => {
-                        res.write(`data: ${JSON.stringify({ type: 'chunk', content })}\n\n`);
+                        try {
+                            res.write(`data: ${JSON.stringify({ type: 'chunk', content })}\n\n`);
+                        } catch (error) {
+                            console.error('发送数据块失败:', error);
+                        }
                     };
 
                     // 发送完成消息
                     const sendComplete = (fullContent) => {
-                        res.write(`data: ${JSON.stringify({ type: 'done', content: fullContent })}\n\n`);
-                        res.end();
+                        try {
+                            res.write(`data: ${JSON.stringify({ type: 'done', content: fullContent })}\n\n`);
+                            res.end();
+                        } catch (error) {
+                            console.error('发送完成消息失败:', error);
+                            if (!res.headersSent) {
+                                res.writeHead(500, { 'Content-Type': 'application/json' });
+                                res.end(JSON.stringify({ error: '发送完成消息失败' }));
+                            }
+                        }
                     };
 
                     // 发送错误消息
                     const sendError = (error) => {
-                        res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
-                        res.end();
+                        try {
+                            console.error('AI服务错误:', error);
+                            res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
+                            res.end();
+                        } catch (writeError) {
+                            console.error('发送错误消息失败:', writeError);
+                            if (!res.headersSent) {
+                                res.writeHead(500, { 'Content-Type': 'application/json' });
+                                res.end(JSON.stringify({ error: '服务器内部错误' }));
+                            }
+                        }
                     };
 
-                    // 调用AI服务
-                    this.aiService.sendChatStream(
-                        message,
-                        sessionId,
-                        sendChunk,
-                        sendComplete,
-                        sendError
-                    );
+                    // 调用AI服务，添加错误处理
+                    try {
+                        this.aiService.sendChatStream(
+                            message,
+                            sessionId,
+                            sendChunk,
+                            sendComplete,
+                            sendError
+                        );
+                    } catch (error) {
+                        console.error('调用AI服务失败:', error);
+                        sendError(error);
+                    }
                 } else {
                     // 非流式输出
                     this.aiService.sendChat(message, sessionId)
